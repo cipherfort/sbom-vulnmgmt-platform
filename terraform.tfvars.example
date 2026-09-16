@@ -1,0 +1,23 @@
+# Copy this file to terraform.tfvars and fill in values for your environment.
+# terraform.tfvars is gitignored — never commit real values.
+
+# CIDR ranges allowed to reach the Dependency-Track and DefectDojo web
+# UIs/APIs. Examples below use RFC 5737 documentation ranges — replace with
+# your own office/VPN egress ranges.
+#
+# Note: if you call this platform's reusable workflows from GitHub-hosted
+# runners (ubuntu-latest), their calls come from GitHub's large, dynamic
+# runner IP pool, which you can't practically allowlist here — see the
+# README's "Known gaps" section for the tradeoff.
+allowed_ip_ranges = [
+  "203.0.113.0/24",
+  "198.51.100.4/32",
+]
+
+# Email address DefectDojo's admin account is configured with.
+admin_email = "admin@example.com"
+
+# Optional overrides — defaults shown, uncomment to change:
+# location             = "uksouth"
+# dtrack_image_tag     = "4.12.4"
+# defectdojo_image_tag = "2.42.1"
