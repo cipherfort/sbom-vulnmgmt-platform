@@ -188,11 +188,15 @@ There's a second identity worth calling out separately: the one GitHub Actions u
 
 > If you grep this entire repo for a password, you'll find none — because there aren't any. Everything is generated at deploy time and handed only to the identity that needs it.
 
-### Why public HTTPS + an IP allowlist, and not a private network from day one
+### Why public HTTPS + an IP allowlist by default, and what `enable_private_networking` actually locks down
 
-This is the least mature part of the design, and it's worth calling out as an acknowledged tradeoff rather than glossing over it. The "correct" version puts everything on a private network with no public exposure at all. This platform doesn't start there because it adds real setup complexity (a VNet, private endpoints, DNS) for something that, on day one, holds no production-sensitive data. The sequencing is deliberate: prove the pipeline works, then harden the network before it holds anything that actually matters.
+The default posture puts Container Apps ingress, Postgres, and Key Vault all on Azure's public network (Postgres/Key Vault behind an IP allowlist and RBAC/managed identity respectively, but reachable in principle from anywhere). Setting `enable_private_networking = true` moves Postgres and Key Vault onto a VNet with private endpoints — but deliberately **not** Container Apps ingress. That's not a corner cut; it's what keeps the platform usable with GitHub-hosted CI runners at all. A fully internal Container Apps Environment (`internal_load_balancer_enabled = true`) would need a self-hosted runner or VPN/peering to reach it — a much bigger commitment this repo doesn't make on your behalf.
 
-Every decision above follows the same rule: match the infrastructure to the actual size and maturity of the problem today, and write down explicitly what would change that decision later (real load → bigger Postgres/Redis tier or AKS; production-sensitive data → private networking; more usage → high availability — all tracked in [§7](#7-security-posture-and-known-gaps)).
+Key Vault specifically can't go fully `public_network_access_enabled = false` the way Postgres does, either: Postgres databases are managed entirely through Azure's ARM control plane, so disabling its public data-plane access doesn't affect Terraform's own ability to manage it. Key Vault secrets are a genuine data-plane API (`https://<vault>.vault.azure.net/...`) — fully disabling public access would mean `terraform apply` itself could only run from inside the VNet. An IP allowlist (reusing `allowed_ip_ranges`) gets the same "block the random internet" outcome while staying deployable from wherever you already run Terraform.
+
+Verified against a real deployment: with the flag on, Postgres and Key Vault are confirmed unreachable outside the VNet/allowlist, Container Apps keep their public FQDNs, and a fresh container restart successfully fetched its Key Vault secret and queried Postgres through the VNet-integrated environment — the private endpoint path actually works end to end, not just on paper.
+
+Every decision in this document follows the same rule: match the infrastructure to the actual size and maturity of the problem today, and write down explicitly what would change that decision later (real load → bigger Postgres/Redis tier or AKS; more usage → high availability — all tracked in [§7](#7-security-posture-and-known-gaps)).
 
 ---
 
@@ -258,7 +262,8 @@ Once you're past initial rollout, a few things worth tracking:
 
 | Gap | Current mitigation | Follow-up |
 |---|---|---|
-| Ingress is public HTTPS, not a private VNet | IP allowlist (see README's "Known gaps" for the tradeoff with GitHub-hosted CI runners) | Move to VNet + private endpoints once real production vuln data lives here |
+| Ingress is public HTTPS by default | IP allowlist (see README's "Known gaps" for the tradeoff with GitHub-hosted CI runners) | Container Apps ingress itself has no private-only option in this repo — only Postgres/Key Vault do, via `enable_private_networking` |
+| Postgres/Key Vault reachable from any Azure service by default | `enable_private_networking = true` moves both onto a VNet with private endpoints | Not the default, since it requires a delegated-subnet-capable region and adds real setup complexity |
 | No HA | Single Postgres/Redis instance, `min_replicas=1` everywhere | Revisit once real usage is known |
 | No tested backup/restore | Postgres's built-in 7-day retention | Run a restore drill before this holds anything business-critical |
 | Bicep repos have no dependency-level SBOM coverage | Checkov/PSRule cover misconfig; `image-scan.yml` covers referenced container images | No mitigation for registry-module provenance risk today — accepted, see §6 |

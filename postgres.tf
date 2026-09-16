@@ -27,6 +27,10 @@ resource "azurerm_postgresql_flexible_server" "this" {
   zone                         = "1"
   backup_retention_days        = 7
   geo_redundant_backup_enabled = false
+
+  delegated_subnet_id           = var.enable_private_networking ? azurerm_subnet.postgres[0].id : null
+  private_dns_zone_id           = var.enable_private_networking ? azurerm_private_dns_zone.postgres[0].id : null
+  public_network_access_enabled = !var.enable_private_networking
 }
 
 resource "azurerm_postgresql_flexible_server_database" "dtrack" {
@@ -45,10 +49,10 @@ resource "azurerm_postgresql_flexible_server_database" "defectdojo" {
 
 # MVP: Container Apps without a custom VNet integration doesn't have a fixed
 # egress IP, so the pragmatic default is "allow Azure services" rather than a
-# tight IP rule here. Tighten by moving both the Container Apps environment
-# and this server onto the same VNet with private endpoints — see README
-# "Networking hardening".
+# tight IP rule here. Meaningless once enable_private_networking disables
+# public access entirely, hence the count below.
 resource "azurerm_postgresql_flexible_server_firewall_rule" "allow_azure_services" {
+  count            = var.enable_private_networking ? 0 : 1
   name             = "AllowAzureServices"
   server_id        = azurerm_postgresql_flexible_server.this.id
   start_ip_address = "0.0.0.0"

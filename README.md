@@ -105,7 +105,7 @@ See [`docs/how-to-use.md`](docs/how-to-use.md) §4 for the full step-by-step (se
 
 ## Known gaps / next hardening steps
 
-- **Networking**: ingress is external HTTPS + IP allowlist, not a private VNet. Fine for MVP; move both the Container Apps Environment and PostgreSQL Flexible Server onto a shared VNet with private endpoints once this holds real production vuln data.
+- **Networking**: by default, ingress is external HTTPS + IP allowlist, and Postgres/Key Vault are reachable from any Azure service. Set `enable_private_networking = true` to move Postgres and Key Vault onto a VNet with private endpoints (public access disabled on both, restricted to an IP allowlist for Key Vault since Terraform itself needs data-plane access to write secrets) — Container Apps ingress stays public either way, so GitHub-hosted CI runners keep working unchanged. This is "data plane" hardening, not full network isolation; see `docs/ARCHITECTURE.md` §5 for the tradeoff.
 - **GitHub-hosted runners vs. IP allowlisting**: if you use the default `ubuntu-latest` runners in `sbom-scan.yml`/`image-scan.yml`, their calls into this platform come from GitHub's large, dynamic runner IP pool, which a real `allowed_ip_ranges` allowlist can't practically cover. Either use a self-hosted runner with known static egress, or accept broader ingress exposure — there's no way to have both hosted runners and a tight allowlist. See the `ALLOWED_IP_RANGES` note above.
 - **No HA**: single Postgres instance (`B_Standard_B1ms`), single Redis node, `min_replicas = 1` everywhere. Revisit sizing once real usage is known.
 - **Backups**: relies on Postgres Flexible Server's built-in 7-day backup retention. No tested restore procedure yet.

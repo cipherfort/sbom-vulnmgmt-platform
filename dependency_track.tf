@@ -22,6 +22,7 @@ resource "azurerm_container_app" "dtrack_apiserver" {
   resource_group_name          = azurerm_resource_group.this.name
   container_app_environment_id = azurerm_container_app_environment.this.id
   revision_mode                = "Single"
+  workload_profile_name        = var.enable_private_networking ? "Consumption" : null
 
   identity {
     type         = "UserAssigned"
@@ -106,6 +107,7 @@ resource "azurerm_container_app" "dtrack_frontend" {
   resource_group_name          = azurerm_resource_group.this.name
   container_app_environment_id = azurerm_container_app_environment.this.id
   revision_mode                = "Single"
+  workload_profile_name        = var.enable_private_networking ? "Consumption" : null
 
   template {
     min_replicas = 1

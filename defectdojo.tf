@@ -45,6 +45,7 @@ resource "azurerm_container_app" "defectdojo_web" {
   resource_group_name          = azurerm_resource_group.this.name
   container_app_environment_id = azurerm_container_app_environment.this.id
   revision_mode                = "Single"
+  workload_profile_name        = var.enable_private_networking ? "Consumption" : null
 
   identity {
     type         = "UserAssigned"
@@ -219,6 +220,7 @@ resource "azurerm_container_app" "defectdojo_celeryworker" {
   resource_group_name          = azurerm_resource_group.this.name
   container_app_environment_id = azurerm_container_app_environment.this.id
   revision_mode                = "Single"
+  workload_profile_name        = var.enable_private_networking ? "Consumption" : null
 
   identity {
     type         = "UserAssigned"
@@ -283,6 +285,7 @@ resource "azurerm_container_app" "defectdojo_celerybeat" {
   resource_group_name          = azurerm_resource_group.this.name
   container_app_environment_id = azurerm_container_app_environment.this.id
   revision_mode                = "Single"
+  workload_profile_name        = var.enable_private_networking ? "Consumption" : null
 
   identity {
     type         = "UserAssigned"

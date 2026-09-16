@@ -7,6 +7,28 @@ resource "azurerm_key_vault" "this" {
   enable_rbac_authorization  = true
   purge_protection_enabled   = true
   soft_delete_retention_days = 7
+
+  # Deliberately NOT public_network_access_enabled = false here, unlike
+  # Postgres. Postgres databases are managed entirely through the ARM
+  # control plane (azurerm_postgresql_flexible_server_database never speaks
+  # the Postgres wire protocol), so disabling its public network access
+  # doesn't affect Terraform's own ability to manage it. Key Vault secrets
+  # (azurerm_key_vault_secret) are a DATA-plane API
+  # (https://<vault>.vault.azure.net/...) — fully disabling public access
+  # would mean `terraform apply` itself could only run from inside the VNet.
+  # An IP allowlist (reusing the same ranges already used for Container
+  # Apps ingress) blocks the random internet while keeping this deployable
+  # from wherever you already run Terraform from. The private endpoint
+  # below gives the VNet-integrated Container Apps Environment its own,
+  # separate access path regardless of this firewall.
+  dynamic "network_acls" {
+    for_each = var.enable_private_networking ? [1] : []
+    content {
+      default_action = "Deny"
+      bypass         = "AzureServices"
+      ip_rules       = var.allowed_ip_ranges
+    }
+  }
 }
 
 # The deploying identity (CI's OIDC service principal, or whoever runs

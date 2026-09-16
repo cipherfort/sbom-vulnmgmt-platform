@@ -48,3 +48,9 @@ variable "admin_email" {
   type        = string
   default     = "admin@example.com"
 }
+
+variable "enable_private_networking" {
+  description = "Moves PostgreSQL and Key Vault onto a VNet with private endpoints (public network access disabled on both). Container Apps ingress stays External/public — GitHub-hosted CI runners keep working unchanged. Default false preserves today's verified public-access behavior exactly."
+  type        = bool
+  default     = false
+}
