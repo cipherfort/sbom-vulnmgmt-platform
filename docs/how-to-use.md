@@ -2,7 +2,9 @@
 
 This guide covers day-to-day use of the platform, how to onboard another repo, and how Bicep repos are handled differently from Terraform/npm ones. For *why* this platform was chosen, see [`docs/adr/0001-sbom-and-vulnerability-management-platform.md`](adr/0001-sbom-and-vulnerability-management-platform.md). For deploying the platform itself, see the root [`README.md`](../README.md).
 
-**GHAS Enterprise note:** Checkov and Trivy findings are dual-written (see ADR-0001) — SARIF goes to both GitHub's native Security tab *and* DefectDojo. DefectDojo is the single pane across every repo and finding type; GHAS's tab is a secondary, per-repo, PR-native view of the same SARIF-sourced findings, not a second source of truth. This guide reflects that throughout.
+**Note on GitHub Advanced Security:** Checkov and Trivy findings are dual-written (see ADR-0001) — SARIF goes to both GitHub's native Security tab *and* DefectDojo, if you use GitHub Advanced Security or code scanning. DefectDojo is the single pane across every repo and finding type; GitHub's tab is a secondary, per-repo, PR-native view of the same SARIF-sourced findings, not a second source of truth. This guide reflects that throughout.
+
+**Note on CI runners:** the reusable workflows default to GitHub-hosted `ubuntu-latest` runners. If you've configured `allowed_ip_ranges` as a real IP allowlist rather than leaving the platform openly reachable, calls from hosted runners won't pass it — see the root [`README.md`](../README.md)'s "Known gaps" section before your first onboarding run, so a 403 here doesn't come as a surprise.
 
 ---
 
@@ -43,17 +45,17 @@ Every onboarded repo becomes one or more **Projects**, named after the repo, ver
 
 | Project name | Project version | Created by |
 |---|---|---|
-| `azure-policy-as-code-terraform` | `main` | `cd.yml`, on every push to `main` |
-| `azure-policy-as-code-terraform` | `pr-142` | `ci.yml`, on PR #142 |
+| `example-terraform-infra` | `main` | `cd.yml`, on every push to `main` |
+| `example-terraform-infra` | `pr-142` | `ci.yml`, on PR #142 |
 
 PR-versioned projects accumulate over time (one per PR number). This is intentional — it lets you compare a PR's dependency set against `main` before merging. There's no automatic cleanup yet; if the project list gets noisy, delete old `pr-*` projects manually (Projects → select → Delete) — this is safe, `main` is unaffected.
 
 ### Reading a project
 
 Open a project → you'll see:
-- **Components** tab — every Terraform provider (or npm package, for the LZA repo) at the exact version `cdxgen` found in the repo, pulled straight from `bom.json`
+- **Components** tab — every Terraform provider (or npm package, for an npm/CDK repo) at the exact version `cdxgen` found in the repo, pulled straight from `bom.json`
 - **Vulnerabilities** tab — anything Dependency-Track matched between those components and NVD/GitHub Advisories/OSV, with severity
-- **Dependency Graph** — usually flat for Terraform (providers don't have deep transitive trees the way npm does); more useful on the LZA repo
+- **Dependency Graph** — usually flat for Terraform (providers don't have deep transitive trees the way npm does); more useful for npm/CDK repos with deep transitive dependency trees
 
 ### Why you don't need to re-scan
 
@@ -76,7 +78,7 @@ DefectDojo is the **single pane across every onboarded repo and finding type**: 
 
 ### Products and Engagements
 
-One **Product** per repo (e.g. `Azure Policy as Code`), one **Engagement** per import (named `cd-<git-sha>`). This mirrors the "one Dependency-Track project per branch" idea, but at the DefectDojo layer it's "one engagement per deploy" — so you can see exactly which commit a finding was first observed on.
+One **Product** per repo (e.g. `Example Terraform Infra`), one **Engagement** per import (named `cd-<git-sha>`). This mirrors the "one Dependency-Track project per branch" idea, but at the DefectDojo layer it's "one engagement per deploy" — so you can see exactly which commit a finding was first observed on.
 
 ### Triaging a finding
 
@@ -119,7 +121,7 @@ Add a job to that repo's CI workflow (PR-triggered) and CD workflow (push-to-def
 ```yaml
 jobs:
   sbom-scan:
-    uses: sg-cloud-platform/cps-security-platform-infra/.github/workflows/sbom-scan.yml@main
+    uses: cipherfort/sbom-vulnmgmt-platform/.github/workflows/sbom-scan.yml@main
     with:
       sbom_type: terraform                              # or: npm — see step 3
       project_name: ${{ github.event.repository.name }}
@@ -133,14 +135,14 @@ jobs:
       defectdojo_api_key: ${{ secrets.DEFECTDOJO_API_KEY }}
 ```
 
-This is exactly what `azure-policy-as-code-terraform`'s `ci.yml`/`cd.yml` do today, just inlined there instead of called as a reusable workflow (it was the pilot — wired inline first, extracted here second). New repos should use the `uses:` form above rather than copy-pasting the inline steps.
+A repo whose CI predates this platform will often have the same steps wired inline instead of called as a reusable workflow — that's fine as a stopgap, but new repos should use the `uses:` form above rather than copy-pasting inline steps.
 
 ### Step 3 — Pick `sbom_type` and the DefectDojo import point
 
 | Repo kind | `sbom_type` | Notes |
 |---|---|---|
 | Terraform | `terraform` | Reads `.terraform.lock.hcl` + provider requirement blocks |
-| npm / CDK (e.g. AWS Landing Zone Accelerator) | `npm` | Needs a `package-lock.json` committed — `cdxgen` reads it to resolve exact resolved versions, not just the ranges in `package.json` |
+| npm / CDK | `npm` | Needs a `package-lock.json` committed — `cdxgen` reads it to resolve exact resolved versions, not just the ranges in `package.json` |
 | Bicep | — not onboarded — | See [§5](#5-how-bicep-repos-are-treated) |
 
 Set `import_to_defectdojo: true` **only** on the call from the default-branch/CD workflow, not from the PR-triggered one. Findings tracking should reflect what's actually deployed, not every open PR branch — otherwise DefectDojo fills up with findings for code that may never merge.
@@ -153,15 +155,15 @@ Set `import_to_defectdojo: true` **only** on the call from the default-branch/CD
 
 ### Step 5 — Adapting to a repo's existing CI/CD shape
 
-Steps 1–4 assume a repo shaped like the pilot (`azure-policy-as-code-terraform`): a separate PR-triggered workflow and merge-triggered workflow. Not every future repo will look like that — here's how to fit the same two jobs into whatever shape a given repo actually has.
+Steps 1–4 assume a repo shaped with a separate PR-triggered workflow and merge-triggered workflow. Not every future repo will look like that — here's how to fit the same two jobs into whatever shape a given repo actually has.
 
-**Repo has separate PR and merge workflows** — the case Steps 1–4 already cover. Add the job to both; `import_to_defectdojo: false` on the PR one, `true` on the merge one. This is the pattern in `azure-policy-as-code-terraform`'s `ci.yml`/`cd.yml` — worth opening those two files side by side with a new repo's equivalents as a working reference.
+**Repo has separate PR and merge workflows** — the case Steps 1–4 already cover. Add the job to both; `import_to_defectdojo: false` on the PR one, `true` on the merge one.
 
 **Repo has one combined workflow triggered on both `pull_request` and `push`** — don't duplicate the job; branch its inputs on `github.event_name` instead:
 ```yaml
 jobs:
   sbom-scan:
-    uses: sg-cloud-platform/cps-security-platform-infra/.github/workflows/sbom-scan.yml@main
+    uses: cipherfort/sbom-vulnmgmt-platform/.github/workflows/sbom-scan.yml@main
     with:
       sbom_type: terraform
       project_name: ${{ github.event.repository.name }}
@@ -175,13 +177,13 @@ jobs:
       defectdojo_api_key: ${{ secrets.DEFECTDOJO_API_KEY }}
 ```
 
-**Repo has a per-environment deployment matrix** (like the pilot's `detect-changes` → `terraform-plan`/`terraform` matrix, one plan/apply per management group) — the SBOM job describes the repo's *dependencies*, not its *deployment targets*. It runs **once**, as a job sibling to the matrix job, never nested inside `strategy.matrix` — a repo with 5 environments should still produce exactly one SBOM per commit, not five identical ones.
+**Repo has a per-environment deployment matrix** (a `detect-changes` → `terraform-plan`/`terraform` matrix, one plan/apply per environment) — the SBOM job describes the repo's *dependencies*, not its *deployment targets*. It runs **once**, as a job sibling to the matrix job, never nested inside `strategy.matrix` — a repo with 5 environments should still produce exactly one SBOM per commit, not five identical ones.
 
-**Repo is the AWS Landing Zone Accelerator (CDK/npm)** — mechanically identical to a Terraform repo, just `sbom_type: npm` instead of `terraform`, and it needs `package-lock.json` committed (see §4, Step 3). Slot the job in alongside whatever `cdk synth`/`cdk diff`/`cdk deploy` steps that repo's pipeline already has; there's no interaction between them — it's an independent job like Checkov is in the pilot's `ci.yml`.
+**Repo is an npm/CDK app** — mechanically identical to a Terraform repo, just `sbom_type: npm` instead of `terraform`, and it needs `package-lock.json` committed (see §4, Step 3). Slot the job in alongside whatever `cdk synth`/`cdk diff`/`cdk deploy` steps that repo's pipeline already has; there's no interaction between them — it's an independent job like Checkov would be.
 
-### Pin the reusable workflow reference deliberately, once past the pilot
+### Pin the reusable workflow reference deliberately, once past initial rollout
 
-Every example above uses `@main`. That's the right choice while this platform is a single pilot repo being proven out — but once several repos depend on `sbom-scan.yml`/`image-scan.yml`, a change to either file on `main` changes behavior in every consuming repo simultaneously, with no warning and no chance to test it against one repo first. Once onboarding moves past the pilot:
+Every example above uses `@main`. That's the right choice while you're proving this out on one or two repos — but once several repos depend on `sbom-scan.yml`/`image-scan.yml`, a change to either file on `main` changes behavior in every consuming repo simultaneously, with no warning and no chance to test it against one repo first. Once onboarding moves past initial rollout:
 
 - Tag releases of this repo (`v1`, `v2`, ...) and have new consumers reference `@v1` instead of `@main`
 - Bump each consumer's pin deliberately when you cut a new tag, rather than letting every repo silently pick up whatever's newest on `main`
@@ -215,7 +217,7 @@ If a Bicep repo deploys workloads that reference a container image (Container Ap
      image-scan:
        permissions:
          security-events: write
-       uses: sg-cloud-platform/cps-security-platform-infra/.github/workflows/image-scan.yml@main
+       uses: cipherfort/sbom-vulnmgmt-platform/.github/workflows/image-scan.yml@main
        with:
          image_refs: '["myacr.azurecr.io/myapp:1.4.2","mcr.microsoft.com/dotnet/aspnet:8.0"]'
          acr_login: true                                    # false if every image is public
@@ -258,7 +260,7 @@ jq -r '.components[] | "\(.name) \(.version)"' bom.json
 jq '.components | length' bom.json
 ```
 
-`azure-policy-as-code-terraform` wraps the Terraform command as `make sbom` (see its `Makefile`).
+Consider wrapping this as a `make sbom` target in your own repos for consistency.
 
 ---
 

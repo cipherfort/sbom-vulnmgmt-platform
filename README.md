@@ -1,16 +1,21 @@
-# Security Platform Infra
+# SBOM & Vulnerability Management Platform
 
-Terraform for the team's shared SBOM + vulnerability management platform: **Dependency-Track** (SBOM ingestion, continuous CVE monitoring) feeding **DefectDojo**, which is the **single pane across every onboarded repo and finding type** — Terraform/npm SCA, Checkov misconfiguration, and Trivy image findings all land there. Consumed by CI in the IaC repos via two reusable workflows: [`.github/workflows/sbom-scan.yml`](.github/workflows/sbom-scan.yml) (Terraform/npm repos — starting with `cps-azure-policy-as-code-terraform`) and [`.github/workflows/image-scan.yml`](.github/workflows/image-scan.yml) (container images referenced from Bicep or any other repo, via Trivy).
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+![Terraform](https://img.shields.io/badge/terraform-%3E%3D1.10.0-623CE4?logo=terraform&logoColor=white)
 
-This platform exists specifically to cover what **GitHub Advanced Security (GHAS) Enterprise — already licensed — does not**: Terraform providers have no Dependabot/Dependency-Graph support at all (verified against current GitHub docs, not assumed). Checkov and Trivy findings are **dual-written** — SARIF to GHAS's native Security tab (free, gives PR-native annotations) *and* to DefectDojo (so DefectDojo stays authoritative across everything, not just Dependency-Track's findings). See [ADR-0001](docs/adr/0001-sbom-and-vulnerability-management-platform.md).
+Terraform to self-host a shared SBOM ingestion + vulnerability management platform: **Dependency-Track** (SBOM ingestion, continuous CVE monitoring) feeding **DefectDojo**, which is the **single pane across every onboarded repo and finding type** — Terraform/npm SCA, Checkov misconfiguration, and Trivy image findings all land there. Consumed by CI via two reusable workflows: [`.github/workflows/sbom-scan.yml`](.github/workflows/sbom-scan.yml) (Terraform/npm repos) and [`.github/workflows/image-scan.yml`](.github/workflows/image-scan.yml) (container images referenced from Bicep or any other repo, via Trivy).
 
-Deployed on Azure Container Apps — chosen over AKS/a VM because this is two lightly-loaded, CI-driven internal tools, not a growing workload; revisit if that changes.
+This platform fills a specific gap: **Terraform providers have no GitHub Dependabot/Dependency-Graph support at all** (verified against current GitHub docs, not assumed), so GitHub's native tooling can't tell you when one of your providers has a published CVE. If you also use GitHub Advanced Security or Dependabot, Checkov and Trivy findings are **dual-written** — SARIF to GitHub's native Security tab (free, gives PR-native annotations) *and* to DefectDojo — so DefectDojo stays a genuine single pane across everything rather than splitting findings across two places. See [ADR-0001](docs/adr/0001-sbom-and-vulnerability-management-platform.md) for the full reasoning.
+
+Deployed on Azure Container Apps — chosen over AKS/a VM because this is two lightly-loaded, CI-driven tools, not a growing workload; revisit if that changes.
 
 **Status: scaffolded, not yet deployed.** Nothing here has been applied. Do the manual bootstrap below, review the Terraform, then apply.
 
-**For the team / decision record:** [`docs/team-presentation.md`](docs/team-presentation.md) covers the problem statement, tool-landscape comparison, and rollout plan. [`docs/adr/0001-sbom-and-vulnerability-management-platform.md`](docs/adr/0001-sbom-and-vulnerability-management-platform.md) is the formal decision record.
+**For background and architecture detail:** [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) covers the problem statement, tool-landscape comparison, and design rationale. [`docs/adr/0001-sbom-and-vulnerability-management-platform.md`](docs/adr/0001-sbom-and-vulnerability-management-platform.md) is the formal decision record.
 
 **For day-to-day use:** [`docs/how-to-use.md`](docs/how-to-use.md) — operating Dependency-Track and DefectDojo, onboarding another repo, and how Bicep repos are handled differently.
+
+**Licensed under the [MIT License](LICENSE).** Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ---
 
@@ -29,14 +34,16 @@ GitHub Actions polls DT → exports findings → imports into
 DefectDojo (ca-defectdojo-web [uwsgi+nginx], celeryworker, celerybeat)
     │  Postgres "defectdojo" database, Redis broker
     ▼
-One product/engagement per repo — the team's single vuln-management pane
+One product/engagement per repo — a single pane for vulnerability management across every onboarded repo
 ```
 
 All five apps run in one Container Apps Environment (`cae-security-platform`), share one PostgreSQL Flexible Server (two databases), and pull secrets from one Key Vault (`kv-secplat-*`) via user-assigned managed identities — no secrets in Terraform state beyond what Azure itself requires, no secrets in git.
 
 ## Bootstrap (manual, one-time)
 
-Mirrors how `cps-azure-policy-as-code-terraform` bootstraps its own Azure account access — see that repo's `docs/github-actions-setup.md` for the pattern this follows.
+Uses the standard GitHub Actions OIDC pattern for authenticating to Azure without a long-lived credential: an Azure AD App Registration with federated credentials trusting your GitHub repo/branch, RBAC-scoped to just what this platform needs.
+
+**The resource/storage account names below (`rg-tfstate-security-platform`, `stsecplatstate001`, `rg-security-platform`, `sp-security-platform-github-actions`, etc.) are examples, not requirements — pick your own naming and update `versions.tf`'s `backend` block to match.** Terraform backend blocks can't reference variables, so this is a manual find-and-replace, not something you set once in a `.tfvars` file.
 
 1. **Create the Terraform state storage** (referenced by `versions.tf`'s backend block — update the placeholder names there if you use different ones):
    ```bash
@@ -50,7 +57,7 @@ Mirrors how `cps-azure-policy-as-code-terraform` bootstraps its own Azure accoun
      --name terraform-state --account-name stsecplatstate001 --auth-mode login
    ```
 
-2. **App Registration + OIDC federated credentials**, same two-credential pattern as the policy repo (`pull_request` won't apply here since this repo has no CI-plan-on-PR workflow yet — just add the `branch:main` credential for `cd.yml`):
+2. **App Registration + OIDC federated credentials.** One `branch:main` credential covers `cd.yml`; add a `pull_request` credential too if you later add a plan-on-PR workflow:
    ```bash
    az ad app create --display-name "sp-security-platform-github-actions"
    APP_ID=$(az ad app list --display-name "sp-security-platform-github-actions" --query '[0].appId' -o tsv)
@@ -58,12 +65,13 @@ Mirrors how `cps-azure-policy-as-code-terraform` bootstraps its own Azure accoun
    az ad app federated-credential create --id "$APP_ID" --parameters '{
      "name": "secplat-cd-main",
      "issuer": "https://token.actions.githubusercontent.com",
-     "subject": "repo:sg-cloud-platform/cps-security-platform-infra:ref:refs/heads/main",
+     "subject": "repo:cipherfort/sbom-vulnmgmt-platform:ref:refs/heads/main",
      "audiences": ["api://AzureADTokenExchange"]
    }'
    ```
+   If you've forked this repo, substitute your own `owner/repo` in the `subject` field.
 
-3. **RBAC** — `Contributor` on a dedicated resource group is simplest here (unlike the policy repo, this workload owns real infrastructure, not just policy assignments):
+3. **RBAC** — `Contributor` scoped to a dedicated resource group, since this workload provisions real infrastructure:
    ```bash
    az group create --name rg-security-platform --location uksouth
    SP_OBJECT_ID=$(az ad sp show --id "$APP_ID" --query id -o tsv)
@@ -80,7 +88,7 @@ Mirrors how `cps-azure-policy-as-code-terraform` bootstraps its own Azure accoun
    | `AZURE_CLIENT_ID` | App Registration client ID |
    | `AZURE_TENANT_ID` | Azure AD tenant ID |
    | `AZURE_SUBSCRIPTION_ID` | Target subscription |
-   | `ALLOWED_IP_RANGES` | JSON list, e.g. `["203.0.113.0/24","198.51.100.4/32"]` — office/VPN egress + the `cps-ubuntu-latest-private` runner's egress. Feeds `TF_VAR_allowed_ip_ranges`. |
+   | `ALLOWED_IP_RANGES` | JSON list, e.g. `["203.0.113.0/24","198.51.100.4/32"]` — your office/VPN egress ranges. Feeds `TF_VAR_allowed_ip_ranges`. **Note:** `sbom-scan.yml`/`image-scan.yml` run on GitHub-hosted `ubuntu-latest` runners by default, which don't have stable IPs — their calls into this platform won't pass a real allowlist unless you switch those workflows to a self-hosted runner with known egress, or widen this list. See "Known gaps" below. |
 
 5. **GitHub Environment** `security-platform` (Settings → Environments) — add required reviewers if you want an approval gate before `terraform apply` on push to `main`.
 
@@ -98,8 +106,9 @@ See [`docs/how-to-use.md`](docs/how-to-use.md) §4 for the full step-by-step (se
 ## Known gaps / next hardening steps
 
 - **Networking**: ingress is external HTTPS + IP allowlist, not a private VNet. Fine for MVP; move both the Container Apps Environment and PostgreSQL Flexible Server onto a shared VNet with private endpoints once this holds real production vuln data.
-- **DefectDojo image internals**: the static/media volume mount paths and entrypoint env vars in `defectdojo.tf` were written from the well-established public docker-compose reference, not verified against a running container — confirm against the pinned `defectdojo_image_tag` release's `docker-compose.yml` before first apply, they occasionally shift between releases.
+- **GitHub-hosted runners vs. IP allowlisting**: if you use the default `ubuntu-latest` runners in `sbom-scan.yml`/`image-scan.yml`, their calls into this platform come from GitHub's large, dynamic runner IP pool, which a real `allowed_ip_ranges` allowlist can't practically cover. Either use a self-hosted runner with known static egress, or accept broader ingress exposure — there's no way to have both hosted runners and a tight allowlist. See the `ALLOWED_IP_RANGES` note above.
 - **No HA**: single Postgres instance (`B_Standard_B1ms`), single Redis node, `min_replicas = 1` everywhere. Revisit sizing once real usage is known.
 - **Backups**: relies on Postgres Flexible Server's built-in 7-day backup retention. No tested restore procedure yet.
 - **Bicep registry-module provenance**: `image-scan.yml` covers container images referenced from a Bicep template, but nothing scans externally-published Bicep modules themselves — there's no CVE database for that. Pin-to-digest and PR review remain the control; see `docs/how-to-use.md` §5a.
 - **`image-scan.yml`'s `image_refs` is a manually-maintained list**, not auto-discovered from `.bicep` files — it can drift out of sync with what a template actually references if nobody updates it when the template changes.
+- **Resource names aren't parameterized**: names like `rg-security-platform`, `kv-secplat-*`, `cae-security-platform` are fixed in the `.tf` files rather than driven by a `name_prefix`/`project_name` variable. Fine for one deployment per subscription; two people deploying this into the same tenant would collide. Not implemented in this release — a reasonable follow-up if you need multiple instances.
