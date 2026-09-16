@@ -1,0 +1,133 @@
+name: Reusable Container Image Scan
+
+# Called from a Bicep (or any) repo as:
+#   jobs:
+#     image-scan:
+#       permissions:
+#         security-events: write   # required — this job uploads SARIF to your repo's Security tab
+#       uses: sg-cloud-platform/cps-security-platform-infra/.github/workflows/image-scan.yml@main
+#       with:
+#         image_refs: '["myacr.azurecr.io/myapp:1.4.2","mcr.microsoft.com/dotnet/aspnet:8.0"]'
+#         acr_login: true
+#         acr_name: myacr
+#         defectdojo_url: ${{ vars.DEFECTDOJO_URL }}
+#         defectdojo_product_name: ${{ vars.DEFECTDOJO_PRODUCT_NAME }}
+#       secrets:
+#         azure_client_id: ${{ secrets.AZURE_CLIENT_ID }}
+#         azure_tenant_id: ${{ secrets.AZURE_TENANT_ID }}
+#         azure_subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+#         defectdojo_api_key: ${{ secrets.DEFECTDOJO_API_KEY }}
+#
+# This exists for the risk cdxgen/Dependency-Track can't see: container
+# images referenced from Bicep templates (Container Apps, AKS, App Service,
+# Container Instances, ...) have real CVE data even though the Bicep file
+# itself has no package-manager dependency tree.
+#
+# Dual-write, per ADR-0001: the same SARIF file goes to GitHub's native
+# Security tab (free, gives PR-native annotations — GHAS Enterprise is
+# already licensed) AND to DefectDojo via its generic SARIF importer, so
+# DefectDojo stays the single pane across every repo and finding type —
+# not just Dependency-Track's. Omit defectdojo_url/defectdojo_product_name
+# to skip that half and keep GHAS-only, if a given repo genuinely doesn't
+# want it in DefectDojo.
+#
+# image_refs is intentionally an explicit list, not auto-discovered from
+# .bicep files — resource shapes that carry an image reference vary too
+# much (containerGroups, Container Apps, App Service containers, AKS node
+# images...) to regex reliably across repos without seeing real templates
+# first. Keep this list in sync with what the Bicep templates actually
+# reference; auto-extraction is a reasonable follow-up once real patterns
+# are known.
+
+on:
+  workflow_call:
+    inputs:
+      image_refs:
+        description: 'JSON array of image references to scan, e.g. ["myacr.azurecr.io/app:1.2.3"]'
+        type: string
+        required: true
+      acr_login:
+        description: "Log into an Azure Container Registry before scanning (needed for private images)"
+        type: boolean
+        default: false
+      acr_name:
+        description: "ACR name (without .azurecr.io) — required if acr_login is true"
+        type: string
+        default: ""
+      defectdojo_url:
+        description: "Leave unset to skip the DefectDojo import and keep GHAS-only"
+        type: string
+        default: ""
+      defectdojo_product_name:
+        type: string
+        default: ""
+    secrets:
+      azure_client_id:
+        required: false
+      azure_tenant_id:
+        required: false
+      azure_subscription_id:
+        required: false
+      defectdojo_api_key:
+        required: false
+
+jobs:
+  image-scan:
+    name: Trivy scan — ${{ matrix.image }}
+    runs-on: cps-ubuntu-latest-private
+    permissions:
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ${{ fromJSON(inputs.image_refs) }}
+
+    steps:
+      - uses: azure/login@v2
+        if: inputs.acr_login
+        with:
+          client-id: ${{ secrets.azure_client_id }}
+          tenant-id: ${{ secrets.azure_tenant_id }}
+          subscription-id: ${{ secrets.azure_subscription_id }}
+
+      - name: ACR login
+        if: inputs.acr_login
+        run: az acr login --name ${{ inputs.acr_name }}
+
+      # Observability-first, same stance as the SBOM pipeline: this never
+      # fails the job on findings. Severity-based gating is a deliberate
+      # follow-up decision (in GHAS's own branch-protection rules, once
+      # SARIF is landing there), not baked in here.
+      - name: Trivy scan
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ matrix.image }}
+          format: sarif
+          output: trivy-results.sarif
+          exit-code: "0"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: trivy-${{ strategy.job-index }}-${{ github.sha }}
+          path: trivy-results.sarif
+          retention-days: 30
+
+      - name: Upload SARIF to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy-${{ strategy.job-index }}
+
+      - name: Import SARIF into DefectDojo
+        if: inputs.defectdojo_url != ''
+        run: |
+          set -euo pipefail
+          curl -sf -X POST "${{ inputs.defectdojo_url }}/api/v2/import-scan/" \
+            -H "Authorization: Token ${{ secrets.defectdojo_api_key }}" \
+            -F "scan_type=SARIF" \
+            -F "file=@trivy-results.sarif" \
+            -F "product_name=${{ inputs.defectdojo_product_name }}" \
+            -F "engagement_name=image-scan-${{ github.sha }}" \
+            -F "active=true" \
+            -F "verified=true" \
+            -F "close_old_findings=true"

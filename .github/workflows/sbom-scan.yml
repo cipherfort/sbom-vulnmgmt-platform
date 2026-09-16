@@ -1,0 +1,148 @@
+name: Reusable SBOM Scan
+
+# Called from other repos as:
+#   uses: sg-cloud-platform/cps-security-platform-infra/.github/workflows/sbom-scan.yml@main
+#   with:
+#     sbom_type: terraform            # or: npm
+#     project_name: ${{ github.event.repository.name }}
+#     project_version: pr-${{ github.event.pull_request.number }}   # or "main" on the default-branch run
+#     dependency_track_url: ${{ vars.DEPENDENCY_TRACK_URL }}
+#     defectdojo_url: ${{ vars.DEFECTDOJO_URL }}                    # omit to skip the DefectDojo import job
+#     defectdojo_product_name: ${{ vars.DEFECTDOJO_PRODUCT_NAME }}
+#     import_to_defectdojo: true                                    # typically only on the default-branch run
+#   secrets:
+#     dependency_track_api_key: ${{ secrets.DEPENDENCY_TRACK_API_KEY }}
+#     defectdojo_api_key: ${{ secrets.DEFECTDOJO_API_KEY }}
+#
+# Not wired up for Bicep repos on purpose — a CycloneDX SBOM has little value
+# without a package manager behind it. Use Checkov/PSRule for those instead.
+
+on:
+  workflow_call:
+    inputs:
+      sbom_type:
+        description: "cdxgen project type: terraform | npm"
+        type: string
+        required: true
+      project_name:
+        type: string
+        required: true
+      project_version:
+        type: string
+        required: true
+      working_directory:
+        type: string
+        default: "."
+      dependency_track_url:
+        type: string
+        required: true
+      defectdojo_url:
+        description: "Leave unset to skip the DefectDojo import job entirely"
+        type: string
+        default: ""
+      defectdojo_product_name:
+        type: string
+        default: ""
+      import_to_defectdojo:
+        description: "Export Dependency-Track findings and import into DefectDojo (only meaningful once DT has finished analyzing — set true on the default-branch run, not every PR)"
+        type: boolean
+        default: false
+    secrets:
+      dependency_track_api_key:
+        required: true
+      defectdojo_api_key:
+        required: false
+
+jobs:
+  sbom-scan:
+    name: Generate & Upload SBOM
+    runs-on: cps-ubuntu-latest-private
+    outputs:
+      uploaded: ${{ steps.upload.outcome == 'success' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Generate CycloneDX SBOM
+        working-directory: ${{ inputs.working_directory }}
+        run: npx --yes @cyclonedx/cdxgen@10 -t ${{ inputs.sbom_type }} -o bom.json .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom-${{ github.sha }}
+          path: ${{ inputs.working_directory }}/bom.json
+          retention-days: 30
+
+      - name: Upload SBOM to Dependency-Track
+        id: upload
+        uses: DependencyTrack/gh-upload-sbom@v3
+        with:
+          serverhostname: ${{ inputs.dependency_track_url }}
+          apikey: ${{ secrets.dependency_track_api_key }}
+          projectname: ${{ inputs.project_name }}
+          projectversion: ${{ inputs.project_version }}
+          bomfilename: ${{ inputs.working_directory }}/bom.json
+          autocreate: true
+
+  defectdojo-import:
+    name: Import Findings to DefectDojo
+    runs-on: cps-ubuntu-latest-private
+    needs: sbom-scan
+    if: inputs.import_to_defectdojo && needs.sbom-scan.outputs.uploaded == 'true' && inputs.defectdojo_url != ''
+
+    env:
+      DT_URL: ${{ inputs.dependency_track_url }}
+      DT_API_KEY: ${{ secrets.dependency_track_api_key }}
+      DD_URL: ${{ inputs.defectdojo_url }}
+      DD_API_KEY: ${{ secrets.defectdojo_api_key }}
+      DD_PRODUCT_NAME: ${{ inputs.defectdojo_product_name }}
+
+    steps:
+      - name: Wait for Dependency-Track BOM processing
+        id: dtrack
+        run: |
+          set -euo pipefail
+          echo "Waiting for Dependency-Track to finish processing the SBOM..."
+          timeout=600
+          interval=15
+          elapsed=0
+          project_uuid=""
+          while [ $elapsed -lt $timeout ]; do
+            project_uuid=$(curl -sf -H "X-Api-Key: $DT_API_KEY" \
+              "$DT_URL/api/v1/project/lookup?name=${{ inputs.project_name }}&version=${{ inputs.project_version }}" \
+              | jq -r '.uuid // empty')
+            if [ -n "$project_uuid" ]; then
+              component_count=$(curl -sf -H "X-Api-Key: $DT_API_KEY" \
+                "$DT_URL/api/v1/component/project/$project_uuid?limit=1" \
+                -D - -o /dev/null | grep -i '^x-total-count:' | tr -dc '0-9' || echo 0)
+              [ "${component_count:-0}" -gt 0 ] && break
+            fi
+            sleep $interval
+            elapsed=$((elapsed + interval))
+          done
+          if [ -z "$project_uuid" ]; then
+            echo "::error::Dependency-Track project not found after ${timeout}s"
+            exit 1
+          fi
+          echo "project_uuid=$project_uuid" >> "$GITHUB_OUTPUT"
+
+      - name: Export findings and import into DefectDojo
+        env:
+          PROJECT_UUID: ${{ steps.dtrack.outputs.project_uuid }}
+        run: |
+          set -euo pipefail
+          curl -sf -H "X-Api-Key: $DT_API_KEY" \
+            "$DT_URL/api/v1/finding/project/$PROJECT_UUID/export" -o findings.json
+          curl -sf -X POST "$DD_URL/api/v2/import-scan/" \
+            -H "Authorization: Token $DD_API_KEY" \
+            -F "scan_type=Dependency Track Finding Packaging Format" \
+            -F "file=@findings.json" \
+            -F "product_name=$DD_PRODUCT_NAME" \
+            -F "engagement_name=cd-${{ github.sha }}" \
+            -F "active=true" \
+            -F "verified=true" \
+            -F "close_old_findings=true"

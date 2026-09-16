@@ -1,0 +1,86 @@
+name: Security Platform CD
+
+on:
+  push:
+    branches: [main]
+
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Terraform action"
+        type: choice
+        required: true
+        options: [plan, apply]
+
+env:
+  TERRAFORM_VERSION: "1.10.3"
+  TF_PLUGIN_CACHE_DIR: ~/.terraform.d/plugin-cache
+  ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+  ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+  ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+  ARM_USE_OIDC: true
+  TF_VAR_allowed_ip_ranges: ${{ secrets.ALLOWED_IP_RANGES }}
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  terraform:
+    name: Terraform (${{ github.event.inputs.action || 'apply' }})
+    runs-on: cps-ubuntu-latest-private
+
+    concurrency:
+      group: security-platform
+      cancel-in-progress: false
+
+    environment:
+      name: security-platform
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/cache@v4
+        with:
+          path: ${{ env.TF_PLUGIN_CACHE_DIR }}
+          key: tf-plugin-${{ runner.os }}-${{ env.TERRAFORM_VERSION }}-${{ hashFiles('**/.terraform.lock.hcl') }}
+          restore-keys: tf-plugin-${{ runner.os }}-${{ env.TERRAFORM_VERSION }}-
+
+      - run: mkdir -p "${TF_PLUGIN_CACHE_DIR}"
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Terraform Init
+        run: terraform init -no-color
+
+      - name: Terraform Plan
+        id: plan
+        run: terraform plan -no-color -out=tfplan
+
+      - name: Terraform Apply
+        if: github.event_name == 'push' || github.event.inputs.action == 'apply'
+        run: terraform apply -no-color -auto-approve tfplan
+
+      - name: Post deployment summary
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const status = '${{ steps.plan.outcome }}' === 'success' ? '✅ Success' : '❌ Failed';
+            await core.summary
+              .addHeading(`Security Platform ${status}`)
+              .addTable([
+                [{data: 'Field', header: true}, {data: 'Value', header: true}],
+                ['SHA',       '${{ github.sha }}'],
+                ['Actor',     '@${{ github.actor }}'],
+                ['Timestamp', new Date().toISOString()],
+              ])
+              .write();
