@@ -15,7 +15,7 @@ locals {
 }
 
 resource "azurerm_user_assigned_identity" "defectdojo" {
-  name                = "id-defectdojo"
+  name                = "id-${var.name_prefix}-defectdojo"
   resource_group_name = azurerm_resource_group.this.name
   location            = azurerm_resource_group.this.location
 }
@@ -41,7 +41,7 @@ resource "azurerm_role_assignment" "defectdojo_kv_secrets_user" {
 # Fine for this smoke test; needs a real shared volume before this holds
 # actual DefectDojo usage with file uploads.
 resource "azurerm_container_app" "defectdojo_web" {
-  name                         = "ca-defectdojo-web"
+  name                         = "ca-${var.name_prefix}-dd-web"
   resource_group_name          = azurerm_resource_group.this.name
   container_app_environment_id = azurerm_container_app_environment.this.id
   revision_mode                = "Single"
@@ -215,7 +215,7 @@ resource "azurerm_container_app" "defectdojo_web" {
 }
 
 resource "azurerm_container_app" "defectdojo_celeryworker" {
-  name                         = "ca-defectdojo-celeryworker"
+  name                         = "ca-${var.name_prefix}-dd-worker"
   resource_group_name          = azurerm_resource_group.this.name
   container_app_environment_id = azurerm_container_app_environment.this.id
   revision_mode                = "Single"
@@ -279,7 +279,7 @@ resource "azurerm_container_app" "defectdojo_celeryworker" {
 }
 
 resource "azurerm_container_app" "defectdojo_celerybeat" {
-  name                         = "ca-defectdojo-celerybeat"
+  name                         = "ca-${var.name_prefix}-dd-beat"
   resource_group_name          = azurerm_resource_group.this.name
   container_app_environment_id = azurerm_container_app_environment.this.id
   revision_mode                = "Single"

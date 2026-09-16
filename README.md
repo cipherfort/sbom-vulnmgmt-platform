@@ -25,25 +25,25 @@ Deployed on Azure Container Apps — chosen over AKS/a VM because this is two li
 GitHub Actions (any onboarded repo)
     │  cdxgen → bom.json → upload
     ▼
-Dependency-Track (ca-dtrack-api, ca-dtrack-frontend)
+Dependency-Track (ca-<name_prefix>-dt-api, ca-<name_prefix>-dt-fe)
     │  Postgres "dtrack" database
     │  continuous CVE re-scoring
     ▼
 GitHub Actions polls DT → exports findings → imports into
     ▼
-DefectDojo (ca-defectdojo-web [uwsgi+nginx], celeryworker, celerybeat)
+DefectDojo (ca-<name_prefix>-dd-web [uwsgi+nginx], dd-worker, dd-beat)
     │  Postgres "defectdojo" database, Redis broker
     ▼
 One product/engagement per repo — a single pane for vulnerability management across every onboarded repo
 ```
 
-All five apps run in one Container Apps Environment (`cae-security-platform`), share one PostgreSQL Flexible Server (two databases), and pull secrets from one Key Vault (`kv-secplat-*`) via user-assigned managed identities — no secrets in Terraform state beyond what Azure itself requires, no secrets in git.
+All five apps run in one Container Apps Environment (`cae-<name_prefix>`), share one PostgreSQL Flexible Server (two databases), and pull secrets from one Key Vault (`kv-<name_prefix>-*`) via user-assigned managed identities — no secrets in Terraform state beyond what Azure itself requires, no secrets in git. `<name_prefix>` is whatever you set for the `name_prefix` variable, letting multiple deployments coexist in one subscription/tenant without name collisions.
 
 ## Bootstrap (manual, one-time)
 
 Uses the standard GitHub Actions OIDC pattern for authenticating to Azure without a long-lived credential: an Azure AD App Registration with federated credentials trusting your GitHub repo/branch, RBAC-scoped to just what this platform needs.
 
-**The resource/storage account names below (`rg-tfstate-security-platform`, `stsecplatstate001`, `rg-security-platform`, `sp-security-platform-github-actions`, etc.) are examples, not requirements — pick your own naming and update `versions.tf`'s `backend` block to match.** Terraform backend blocks can't reference variables, so this is a manual find-and-replace, not something you set once in a `.tfvars` file.
+**The Terraform state storage names below (`rg-tfstate-security-platform`, `stsecplatstate001`) and the App Registration name (`sp-security-platform-github-actions`) are examples, not requirements — pick your own naming and update `versions.tf`'s `backend` block to match.** Terraform backend blocks can't reference variables, so this is a manual find-and-replace, not something you set once in a `.tfvars` file. The workload resource group (`rg-<name_prefix>`) is different — that one's driven by the `name_prefix` variable (see step 3), not hardcoded.
 
 1. **Create the Terraform state storage** (referenced by `versions.tf`'s backend block — update the placeholder names there if you use different ones):
    ```bash
@@ -71,12 +71,12 @@ Uses the standard GitHub Actions OIDC pattern for authenticating to Azure withou
    ```
    If you've forked this repo, substitute your own `owner/repo` in the `subject` field.
 
-3. **RBAC** — `Contributor` scoped to a dedicated resource group, since this workload provisions real infrastructure:
+3. **RBAC** — `Contributor` scoped to a dedicated resource group, since this workload provisions real infrastructure. This resource group's name must match `rg-<name_prefix>`, where `<name_prefix>` is whatever you set for the `name_prefix` variable — Terraform creates it, but the role assignment below has to be pre-scoped to it before the first apply:
    ```bash
-   az group create --name rg-security-platform --location uksouth
+   az group create --name rg-<name_prefix> --location uksouth
    SP_OBJECT_ID=$(az ad sp show --id "$APP_ID" --query id -o tsv)
    az role assignment create --assignee "$SP_OBJECT_ID" --role "Contributor" \
-     --scope "/subscriptions/<id>/resourceGroups/rg-security-platform"
+     --scope "/subscriptions/<id>/resourceGroups/rg-<name_prefix>"
    az role assignment create --assignee "$SP_OBJECT_ID" --role "Storage Blob Data Contributor" \
      --scope "/subscriptions/<id>/resourceGroups/rg-tfstate-security-platform/providers/Microsoft.Storage/storageAccounts/stsecplatstate001"
    ```
@@ -111,4 +111,3 @@ See [`docs/how-to-use.md`](docs/how-to-use.md) §4 for the full step-by-step (se
 - **Backups**: relies on Postgres Flexible Server's built-in 7-day backup retention. No tested restore procedure yet.
 - **Bicep registry-module provenance**: `image-scan.yml` covers container images referenced from a Bicep template, but nothing scans externally-published Bicep modules themselves — there's no CVE database for that. Pin-to-digest and PR review remain the control; see `docs/how-to-use.md` §5a.
 - **`image-scan.yml`'s `image_refs` is a manually-maintained list**, not auto-discovered from `.bicep` files — it can drift out of sync with what a template actually references if nobody updates it when the template changes.
-- **Resource names aren't parameterized**: names like `rg-security-platform`, `kv-secplat-*`, `cae-security-platform` are fixed in the `.tf` files rather than driven by a `name_prefix`/`project_name` variable. Fine for one deployment per subscription; two people deploying this into the same tenant would collide. Not implemented in this release — a reasonable follow-up if you need multiple instances.

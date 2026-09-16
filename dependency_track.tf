@@ -6,7 +6,7 @@ locals {
 # assignment can be created — and take effect — before the container app
 # that needs it, avoiding a create-time chicken/egg on the secret reference.
 resource "azurerm_user_assigned_identity" "dtrack" {
-  name                = "id-dtrack"
+  name                = "id-${var.name_prefix}-dtrack"
   resource_group_name = azurerm_resource_group.this.name
   location            = azurerm_resource_group.this.location
 }
@@ -18,7 +18,7 @@ resource "azurerm_role_assignment" "dtrack_kv_secrets_user" {
 }
 
 resource "azurerm_container_app" "dtrack_apiserver" {
-  name                         = "ca-dtrack-api"
+  name                         = "ca-${var.name_prefix}-dt-api"
   resource_group_name          = azurerm_resource_group.this.name
   container_app_environment_id = azurerm_container_app_environment.this.id
   revision_mode                = "Single"
@@ -102,7 +102,7 @@ resource "azurerm_container_app" "dtrack_apiserver" {
 
 # Frontend is a separate, stateless SPA — no DB access, no Key Vault secrets.
 resource "azurerm_container_app" "dtrack_frontend" {
-  name                         = "ca-dtrack-frontend"
+  name                         = "ca-${var.name_prefix}-dt-fe"
   resource_group_name          = azurerm_resource_group.this.name
   container_app_environment_id = azurerm_container_app_environment.this.id
   revision_mode                = "Single"

@@ -108,19 +108,19 @@ two ever disagree, DefectDojo is authoritative.
 
 ### Component inventory
 
-Everything below is defined in this repo's Terraform and lives in one resource group (`rg-security-platform`), one Container Apps Environment (`cae-security-platform`), backed by one Log Analytics workspace (`log-security-platform`, 30-day retention):
+Everything below is defined in this repo's Terraform and lives in one resource group (`rg-<name_prefix>`), one Container Apps Environment (`cae-<name_prefix>`), backed by one Log Analytics workspace (`log-<name_prefix>`, 30-day retention). `<name_prefix>` is whatever you set for the `name_prefix` variable, letting multiple deployments coexist in one subscription/tenant:
 
 | Component | Azure resource | Purpose |
 |---|---|---|
-| `ca-dtrack-api` | Container App, 1.0 vCPU / 2 GiB | Dependency-Track's API — what CI actually talks to |
-| `ca-dtrack-frontend` | Container App, 0.5 vCPU / 1 GiB | Dependency-Track's UI — stateless, no DB/Key Vault access |
-| `ca-defectdojo-web` | Container App, two containers (uwsgi 1.0 vCPU/2 GiB + nginx 0.25 vCPU/0.5 GiB) | DefectDojo's UI/API |
-| `ca-defectdojo-celeryworker` | Container App, 0.5 vCPU / 1 GiB | DefectDojo's background job processor (import processing, notifications) |
-| `ca-defectdojo-celerybeat` | Container App, 0.25 vCPU / 0.5 GiB | DefectDojo's scheduled-task trigger |
+| `ca-<name_prefix>-dt-api` | Container App, 1.0 vCPU / 2 GiB | Dependency-Track's API — what CI actually talks to |
+| `ca-<name_prefix>-dt-fe` | Container App, 0.5 vCPU / 1 GiB | Dependency-Track's UI — stateless, no DB/Key Vault access |
+| `ca-<name_prefix>-dd-web` | Container App, two containers (uwsgi 1.0 vCPU/2 GiB + nginx 0.25 vCPU/0.5 GiB) | DefectDojo's UI/API |
+| `ca-<name_prefix>-dd-worker` | Container App, 0.5 vCPU / 1 GiB | DefectDojo's background job processor (import processing, notifications) |
+| `ca-<name_prefix>-dd-beat` | Container App, 0.25 vCPU / 0.5 GiB | DefectDojo's scheduled-task trigger |
 | One PostgreSQL Flexible Server (`B_Standard_B1ms`, 32 GB, v16) | Two databases: `dtrack`, `defectdojo` | Persistent state for both apps — one server to keep MVP cost down |
 | One Azure Managed Redis instance (`Balanced_B0`) | — | DefectDojo's Celery broker only; Dependency-Track doesn't need it |
-| One Key Vault (`kv-secplat-*`, RBAC-authorized) | — | Every generated credential: Postgres admin password, DefectDojo's secret key/AES key/admin password, Redis's access key |
-| Two user-assigned managed identities (`id-dtrack`, `id-defectdojo`) | — | Each granted only `Key Vault Secrets User` on the vault — least-privilege, scoped per app |
+| One Key Vault (`kv-<name_prefix>-*`, RBAC-authorized) | — | Every generated credential: Postgres admin password, DefectDojo's secret key/AES key/admin password, Redis's access key |
+| Two user-assigned managed identities (`id-<name_prefix>-dtrack`, `id-<name_prefix>-defectdojo`) | — | Each granted only `Key Vault Secrets User` on the vault — least-privilege, scoped per app |
 
 ### Why user-assigned identities, specifically
 
@@ -129,8 +129,8 @@ Each app's Container App resource references its Key Vault secrets via `identity
 ### Deployment identity vs. application identities — two different trust boundaries
 
 There are two separate identities in play, with different scopes:
-- **`sp-security-platform-github-actions`** (or whatever you name it) — the OIDC-federated service principal GitHub Actions uses to run `terraform apply`. Scoped to `Contributor` on `rg-security-platform` only, plus `Storage Blob Data Contributor` on the Terraform state storage account. This identity provisions infrastructure.
-- **`id-dtrack` / `id-defectdojo`** — the two application identities described above. Scoped to `Key Vault Secrets User` only. These identities run the applications, and cannot provision or modify infrastructure.
+- **`sp-security-platform-github-actions`** (or whatever you name it) — the OIDC-federated service principal GitHub Actions uses to run `terraform apply`. Scoped to `Contributor` on `rg-<name_prefix>` only, plus `Storage Blob Data Contributor` on the Terraform state storage account. This identity provisions infrastructure.
+- **`id-<name_prefix>-dtrack` / `id-<name_prefix>-defectdojo`** — the two application identities described above. Scoped to `Key Vault Secrets User` only. These identities run the applications, and cannot provision or modify infrastructure.
 
 Neither identity is broader than it needs to be, and compromising one doesn't hand over the other's capability.
 
@@ -263,7 +263,6 @@ Once you're past initial rollout, a few things worth tracking:
 | No tested backup/restore | Postgres's built-in 7-day retention | Run a restore drill before this holds anything business-critical |
 | Bicep repos have no dependency-level SBOM coverage | Checkov/PSRule cover misconfig; `image-scan.yml` covers referenced container images | No mitigation for registry-module provenance risk today — accepted, see §6 |
 | `image-scan.yml`'s `image_refs` is manually maintained | Documented in `how-to-use.md` §5b | Could drift from what a template actually references; revisit auto-discovery once real template patterns are known |
-| Resource names aren't parameterized | Fixed names in the `.tf` files | A `name_prefix`/`project_name` variable would let multiple deployments coexist in one tenant — not implemented in this release |
 
 ---
 

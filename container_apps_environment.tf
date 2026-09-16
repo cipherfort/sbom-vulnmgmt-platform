@@ -1,5 +1,5 @@
 resource "azurerm_log_analytics_workspace" "this" {
-  name                = "log-security-platform"
+  name                = "log-${var.name_prefix}"
   resource_group_name = azurerm_resource_group.this.name
   location            = azurerm_resource_group.this.location
   sku                 = "PerGB2018"
@@ -7,7 +7,7 @@ resource "azurerm_log_analytics_workspace" "this" {
 }
 
 resource "azurerm_container_app_environment" "this" {
-  name                       = "cae-security-platform"
+  name                       = "cae-${var.name_prefix}"
   resource_group_name        = azurerm_resource_group.this.name
   location                   = azurerm_resource_group.this.location
   log_analytics_workspace_id = azurerm_log_analytics_workspace.this.id

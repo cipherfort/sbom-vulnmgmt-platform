@@ -2,7 +2,7 @@
 # Classic azurerm_redis_cache (Basic/Standard/Premium) is retired for new
 # resources on this subscription/region — Azure requires Azure Managed Redis.
 resource "azurerm_managed_redis" "defectdojo" {
-  name                = "redis-defectdojo-${random_string.suffix.result}"
+  name                = "redis-${var.name_prefix}-${random_string.suffix.result}"
   resource_group_name = azurerm_resource_group.this.name
   location            = azurerm_resource_group.this.location
 

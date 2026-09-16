@@ -13,7 +13,7 @@ resource "azurerm_key_vault_secret" "postgres_admin_password" {
 # One server, two databases — keeps MVP cost down. Split into separate
 # servers later if DT/DefectDojo load or blast-radius isolation calls for it.
 resource "azurerm_postgresql_flexible_server" "this" {
-  name                = "psql-security-platform-${random_string.suffix.result}"
+  name                = "psql-${var.name_prefix}-${random_string.suffix.result}"
   resource_group_name = azurerm_resource_group.this.name
   location            = azurerm_resource_group.this.location
 

@@ -5,7 +5,7 @@ resource "random_string" "suffix" {
 }
 
 resource "azurerm_resource_group" "this" {
-  name     = "rg-security-platform"
+  name     = "rg-${var.name_prefix}"
   location = var.location
 
   tags = {

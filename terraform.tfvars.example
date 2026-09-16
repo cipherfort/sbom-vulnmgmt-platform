@@ -1,6 +1,11 @@
 # Copy this file to terraform.tfvars and fill in values for your environment.
 # terraform.tfvars is gitignored — never commit real values.
 
+# Short identifier prepended to every resource name (2-12 chars, lowercase
+# letters/digits/hyphens, no consecutive hyphens). Lets multiple deployments
+# coexist in one subscription/tenant without name collisions.
+name_prefix = "secplat"
+
 # CIDR ranges allowed to reach the Dependency-Track and DefectDojo web
 # UIs/APIs. Examples below use RFC 5737 documentation ranges — replace with
 # your own office/VPN egress ranges.
