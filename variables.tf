@@ -5,7 +5,7 @@ variable "location" {
 }
 
 variable "allowed_ip_ranges" {
-  description = "CIDR ranges allowed to reach Dependency-Track and DefectDojo ingress (office/VPN egress + the cps-ubuntu-latest-private runner's egress)"
+  description = "CIDR ranges allowed to reach the Dependency-Track and DefectDojo web UIs/APIs — typically your office/VPN egress ranges"
   type        = list(string)
 }
 
@@ -19,4 +19,10 @@ variable "defectdojo_image_tag" {
   description = "DefectDojo image tag (django, nginx, celery images share the same release train)"
   type        = string
   default     = "2.42.1"
+}
+
+variable "admin_email" {
+  description = "Email address configured as DefectDojo's admin account email (DD_ADMIN_MAIL)"
+  type        = string
+  default     = "admin@example.com"
 }

@@ -5,7 +5,7 @@ name: Reusable Container Image Scan
 #     image-scan:
 #       permissions:
 #         security-events: write   # required — this job uploads SARIF to your repo's Security tab
-#       uses: sg-cloud-platform/cps-security-platform-infra/.github/workflows/image-scan.yml@main
+#       uses: cipherfort/sbom-vulnmgmt-platform/.github/workflows/image-scan.yml@main
 #       with:
 #         image_refs: '["myacr.azurecr.io/myapp:1.4.2","mcr.microsoft.com/dotnet/aspnet:8.0"]'
 #         acr_login: true
@@ -23,9 +23,9 @@ name: Reusable Container Image Scan
 # Container Instances, ...) have real CVE data even though the Bicep file
 # itself has no package-manager dependency tree.
 #
-# Dual-write, per ADR-0001: the same SARIF file goes to GitHub's native
-# Security tab (free, gives PR-native annotations — GHAS Enterprise is
-# already licensed) AND to DefectDojo via its generic SARIF importer, so
+# Dual-write, per ADR-0001: the same SARIF file goes to the repo's own
+# GitHub Security tab (native, works with GitHub code scanning, gives
+# PR-native annotations) AND to DefectDojo via its generic SARIF importer, so
 # DefectDojo stays the single pane across every repo and finding type —
 # not just Dependency-Track's. Omit defectdojo_url/defectdojo_product_name
 # to skip that half and keep GHAS-only, if a given repo genuinely doesn't
@@ -74,7 +74,7 @@ on:
 jobs:
   image-scan:
     name: Trivy scan — ${{ matrix.image }}
-    runs-on: cps-ubuntu-latest-private
+    runs-on: ubuntu-latest
     permissions:
       security-events: write
     strategy:

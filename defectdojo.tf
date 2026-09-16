@@ -122,7 +122,7 @@ resource "azurerm_container_app" "defectdojo_web" {
       }
       env {
         name  = "DD_ADMIN_MAIL"
-        value = "security-platform@cipherfort.internal"
+        value = var.admin_email
       }
     }
 
@@ -170,7 +170,7 @@ resource "azurerm_container_app" "defectdojo_web" {
       }
       env {
         name  = "DD_ADMIN_MAIL"
-        value = "security-platform@cipherfort.internal"
+        value = var.admin_email
       }
     }
 

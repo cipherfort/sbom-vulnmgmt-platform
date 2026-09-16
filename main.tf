@@ -11,7 +11,7 @@ resource "azurerm_resource_group" "this" {
   tags = {
     environment = "platform"
     managed_by  = "terraform"
-    repo        = "cps-security-platform-infra"
+    repo        = "sbom-vulnmgmt-platform"
   }
 }
 

@@ -28,7 +28,7 @@ permissions:
 jobs:
   terraform:
     name: Terraform (${{ github.event.inputs.action || 'apply' }})
-    runs-on: cps-ubuntu-latest-private
+    runs-on: ubuntu-latest
 
     concurrency:
       group: security-platform

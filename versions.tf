@@ -3,10 +3,10 @@ terraform {
 
   required_providers {
     azurerm = {
-      source  = "hashicorp/azurerm"
-      # Pinned to the 4.x line to match cps-azure-policy-as-code-terraform
-      # (currently on 4.69.0) — azurerm 5.x renames several arguments used
+      source = "hashicorp/azurerm"
+      # Pinned to the 4.x line — azurerm 5.x renames several arguments used
       # here (e.g. enable_rbac_authorization -> rbac_authorization_enabled).
+      # Bump deliberately and update those references if you move to 5.x.
       version = "~> 4.12"
     }
     random = {

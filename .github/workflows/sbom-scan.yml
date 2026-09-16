@@ -1,7 +1,7 @@
 name: Reusable SBOM Scan
 
 # Called from other repos as:
-#   uses: sg-cloud-platform/cps-security-platform-infra/.github/workflows/sbom-scan.yml@main
+#   uses: cipherfort/sbom-vulnmgmt-platform/.github/workflows/sbom-scan.yml@main
 #   with:
 #     sbom_type: terraform            # or: npm
 #     project_name: ${{ github.event.repository.name }}
@@ -56,7 +56,7 @@ on:
 jobs:
   sbom-scan:
     name: Generate & Upload SBOM
-    runs-on: cps-ubuntu-latest-private
+    runs-on: ubuntu-latest
     outputs:
       uploaded: ${{ steps.upload.outcome == 'success' }}
 
@@ -90,7 +90,7 @@ jobs:
 
   defectdojo-import:
     name: Import Findings to DefectDojo
-    runs-on: cps-ubuntu-latest-private
+    runs-on: ubuntu-latest
     needs: sbom-scan
     if: inputs.import_to_defectdojo && needs.sbom-scan.outputs.uploaded == 'true' && inputs.defectdojo_url != ''
 
