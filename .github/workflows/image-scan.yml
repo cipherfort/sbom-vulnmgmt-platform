@@ -118,7 +118,7 @@ jobs:
           sarif_file: trivy-results.sarif
           category: trivy-${{ strategy.job-index }}
 
-      - name: Import SARIF into DefectDojo
+      - name: Import Trivy SARIF into DefectDojo
         if: inputs.defectdojo_url != ''
         run: |
           set -euo pipefail
@@ -126,6 +126,52 @@ jobs:
             -H "Authorization: Token ${{ secrets.defectdojo_api_key }}" \
             -F "scan_type=SARIF" \
             -F "file=@trivy-results.sarif" \
+            -F "product_name=${{ inputs.defectdojo_product_name }}" \
+            -F "engagement_name=image-scan-${{ github.sha }}" \
+            -F "active=true" \
+            -F "verified=true" \
+            -F "close_old_findings=true"
+
+      # Grype as a second, independent container scanner alongside Trivy —
+      # different vulnerability database/matching logic, genuine cross-
+      # validation rather than duplication. Both land in the same DefectDojo
+      # engagement; DefectDojo differentiates by Test Type from the SARIF
+      # tool name (tool.driver.name), so this is additive, not a collision.
+      #
+      # No explicit registry-auth input is wired here — grype's underlying
+      # image resolution conventionally honors the local docker config the
+      # same way `docker pull` does, so the ACR login step above should
+      # carry through transparently. If that doesn't hold for a private
+      # registry in practice, anchore/scan-action also accepts
+      # registry-username/registry-password inputs directly as a fallback.
+      - name: Grype scan
+        uses: anchore/scan-action@v7
+        with:
+          image: ${{ matrix.image }}
+          output-format: sarif
+          output-file: grype-results.sarif
+          fail-build: false
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: grype-${{ strategy.job-index }}-${{ github.sha }}
+          path: grype-results.sarif
+          retention-days: 30
+
+      - name: Upload Grype SARIF to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: grype-results.sarif
+          category: grype-${{ strategy.job-index }}
+
+      - name: Import Grype SARIF into DefectDojo
+        if: inputs.defectdojo_url != ''
+        run: |
+          set -euo pipefail
+          curl -sf -X POST "${{ inputs.defectdojo_url }}/api/v2/import-scan/" \
+            -H "Authorization: Token ${{ secrets.defectdojo_api_key }}" \
+            -F "scan_type=SARIF" \
+            -F "file=@grype-results.sarif" \
             -F "product_name=${{ inputs.defectdojo_product_name }}" \
             -F "engagement_name=image-scan-${{ github.sha }}" \
             -F "active=true" \

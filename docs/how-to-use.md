@@ -206,7 +206,7 @@ If a repo pulls third-party or externally-maintained Bicep modules (private ACR 
 
 ### 5b. Container images referenced from the template — real CVE data, covered by a separate workflow
 
-If a Bicep repo deploys workloads that reference a container image (Container Apps, AKS, App Service containers, Container Instances), that image has real, trackable CVEs — this is exactly the risk cdxgen/Dependency-Track can't see but a container-image scanner can. That's what [`.github/workflows/image-scan.yml`](../.github/workflows/image-scan.yml) is for: it runs Trivy against a list of image references and **dual-writes** the results as SARIF — to **your repo's own GitHub Security tab** (native, free, PR annotations) and to **DefectDojo** (so it stays the single pane — see ADR-0001).
+If a Bicep repo deploys workloads that reference a container image (Container Apps, AKS, App Service containers, Container Instances), that image has real, trackable CVEs — this is exactly the risk cdxgen/Dependency-Track can't see but a container-image scanner can. That's what [`.github/workflows/image-scan.yml`](../.github/workflows/image-scan.yml) is for: it runs **both Trivy and Grype** against a list of image references (two independent scanners, different vulnerability databases — genuine cross-validation, not duplication) and **dual-writes** each tool's results as SARIF — to **your repo's own GitHub Security tab** (native, free, PR annotations) and to **DefectDojo** (so it stays the single pane — see ADR-0001). Both scanners land in the same DefectDojo engagement as separate Test Types.
 
 **Onboarding a Bicep repo to image scanning:**
 
