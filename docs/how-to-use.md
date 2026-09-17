@@ -15,9 +15,10 @@ This guide covers day-to-day use of the platform, how to onboard another repo, a
 3. [Using DefectDojo day to day](#3-using-defectdojo-day-to-day)
 4. [Onboarding a new repo — step by step](#4-onboarding-a-new-repo--step-by-step)
 5. [How Bicep repos are treated](#5-how-bicep-repos-are-treated)
-6. [Generating and inspecting an SBOM locally](#6-generating-and-inspecting-an-sbom-locally)
-7. [Rotating credentials](#7-rotating-credentials)
-8. [Troubleshooting](#8-troubleshooting)
+6. [Additional scanners — secrets, SAST, extra container SCA](#6-additional-scanners--secrets-sast-extra-container-sca)
+7. [Generating and inspecting an SBOM locally](#7-generating-and-inspecting-an-sbom-locally)
+8. [Rotating credentials](#8-rotating-credentials)
+9. [Troubleshooting](#9-troubleshooting)
 
 ---
 
@@ -238,7 +239,32 @@ If neither 5a nor 5b applies to a given Bicep repo — no external modules, no c
 
 ---
 
-## 6. Generating and inspecting an SBOM locally
+## 6. Additional scanners — secrets, SAST, extra container SCA
+
+Three more scanners follow the same dual-write pattern as Checkov/Trivy: SARIF goes to both the repo's GitHub Security tab (if you use it) and DefectDojo, so DefectDojo stays the single pane regardless of which scanners a given repo uses.
+
+### Secret scanning with Gitleaks
+
+[`.github/workflows/secret-scan.yml`](../.github/workflows/secret-scan.yml) runs [Gitleaks](https://github.com/gitleaks/gitleaks) against a repo's full commit history, catching committed secrets — API keys, credentials, tokens — a risk category nothing else in this platform covers at all (SCA and misconfiguration scanning don't look for this).
+
+Applies to any repo, regardless of language or IaC tool:
+```yaml
+jobs:
+  secret-scan:
+    permissions:
+      security-events: write   # required — this job uploads SARIF to your repo's Security tab
+    uses: cipherfort/sbom-vulnmgmt-platform/.github/workflows/secret-scan.yml@main
+    with:
+      defectdojo_url: ${{ vars.DEFECTDOJO_URL }}
+      defectdojo_product_name: ${{ vars.DEFECTDOJO_PRODUCT_NAME }}
+    secrets:
+      defectdojo_api_key: ${{ secrets.DEFECTDOJO_API_KEY }}
+```
+Omit `defectdojo_url`/`defectdojo_product_name` to keep GitHub-Security-tab-only, same graceful-degradation pattern as everywhere else. Never fails the job on findings — observability-first, same stance as the rest of this platform. Run it on every PR; there's no PR-vs-merge distinction needed since it isn't versioned the way Dependency-Track projects are.
+
+---
+
+## 7. Generating and inspecting an SBOM locally
 
 Terraform repos:
 ```bash
@@ -264,7 +290,7 @@ Consider wrapping this as a `make sbom` target in your own repos for consistency
 
 ---
 
-## 7. Rotating credentials
+## 8. Rotating credentials
 
 | Credential | How to rotate |
 |---|---|
@@ -274,7 +300,7 @@ Consider wrapping this as a `make sbom` target in your own repos for consistency
 
 ---
 
-## 8. Troubleshooting
+## 9. Troubleshooting
 
 ### `sbom-scan` job runs but nothing appears in Dependency-Track
 Check that `DEPENDENCY_TRACK_URL` and `DEPENDENCY_TRACK_API_KEY` are actually set on the repo (Settings → Secrets and variables). The upload step is designed to silently skip when either is empty — that's deliberate graceful degradation, not a bug, but it means a missing secret produces no error, just no upload.
