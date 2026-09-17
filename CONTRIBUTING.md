@@ -29,7 +29,7 @@ Short, imperative summary line (e.g. "Fix Redis clustering policy for Celery com
 
 ## Reporting a security issue
 
-If you find something that looks like a security vulnerability rather than a bug, please use GitHub's private security advisory feature (Security tab → Report a vulnerability) instead of opening a public issue.
+See [SECURITY.md](SECURITY.md).
 
 ## Code of conduct
 
