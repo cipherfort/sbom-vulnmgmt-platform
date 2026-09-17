@@ -262,6 +262,24 @@ jobs:
 ```
 Omit `defectdojo_url`/`defectdojo_product_name` to keep GitHub-Security-tab-only, same graceful-degradation pattern as everywhere else. Never fails the job on findings — observability-first, same stance as the rest of this platform. Run it on every PR; there's no PR-vs-merge distinction needed since it isn't versioned the way Dependency-Track projects are.
 
+### SAST with Semgrep
+
+[`.github/workflows/sast-scan.yml`](../.github/workflows/sast-scan.yml) is the one scanner in this platform aimed at application *code* rather than IaC, dependencies, or secrets — relevant once you onboard app repos, not just IaC ones. Uses Semgrep's free `p/default` ruleset (no `SEMGREP_APP_TOKEN` required).
+
+```yaml
+jobs:
+  sast-scan:
+    permissions:
+      security-events: write
+    uses: cipherfort/sbom-vulnmgmt-platform/.github/workflows/sast-scan.yml@main
+    with:
+      defectdojo_url: ${{ vars.DEFECTDOJO_URL }}
+      defectdojo_product_name: ${{ vars.DEFECTDOJO_PRODUCT_NAME }}
+    secrets:
+      defectdojo_api_key: ${{ secrets.DEFECTDOJO_API_KEY }}
+```
+Same graceful-degradation and observability-first behavior as the other scanners. Note it also has real value on IaC-only repos — Semgrep's `p/default` ruleset includes generic YAML/GitHub-Actions-security rules alongside application-code rules, not just app-language findings.
+
 ---
 
 ## 7. Generating and inspecting an SBOM locally

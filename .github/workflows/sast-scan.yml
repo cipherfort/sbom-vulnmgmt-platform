@@ -1,0 +1,79 @@
+name: Reusable SAST Scan
+
+# Called from other repos as:
+#   uses: cipherfort/sbom-vulnmgmt-platform/.github/workflows/sast-scan.yml@main
+#   with:
+#     defectdojo_url: ${{ vars.DEFECTDOJO_URL }}                    # omit to skip the DefectDojo import
+#     defectdojo_product_name: ${{ vars.DEFECTDOJO_PRODUCT_NAME }}
+#   secrets:
+#     defectdojo_api_key: ${{ secrets.DEFECTDOJO_API_KEY }}
+#
+# This is the one scanner in this platform aimed at application *code*
+# rather than IaC/dependencies/secrets — relevant once this platform starts
+# onboarding app repos, not just IaC ones. Uses Semgrep's free, no-login
+# p/default ruleset via the CLI directly (the official wrapper action is
+# deprecated).
+#
+# Dual-write, same pattern as every other scanner here: SARIF goes to the
+# repo's own GitHub Security tab AND to DefectDojo.
+
+on:
+  workflow_call:
+    inputs:
+      defectdojo_url:
+        description: "Leave unset to skip the DefectDojo import job entirely"
+        type: string
+        default: ""
+      defectdojo_product_name:
+        type: string
+        default: ""
+    secrets:
+      defectdojo_api_key:
+        required: false
+
+jobs:
+  sast-scan:
+    name: Semgrep scan
+    runs-on: ubuntu-latest
+    container:
+      image: semgrep/semgrep
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # p/default, not `auto` — `auto` surfaces account-gated "requires
+      # login" placeholder findings without a SEMGREP_APP_TOKEN; p/default
+      # is Semgrep's free, no-login ruleset. Observability-first, same
+      # stance as everything else in this platform: no --error flag, so
+      # this never fails the job on findings.
+      - name: Semgrep scan
+        run: semgrep scan --config=p/default --sarif --sarif-output=semgrep-results.sarif .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: semgrep-${{ github.sha }}
+          path: semgrep-results.sarif
+          retention-days: 30
+
+      - name: Upload SARIF to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: semgrep-results.sarif
+          category: semgrep
+
+      - name: Import SARIF into DefectDojo
+        if: inputs.defectdojo_url != ''
+        run: |
+          set -euo pipefail
+          curl -sf -X POST "${{ inputs.defectdojo_url }}/api/v2/import-scan/" \
+            -H "Authorization: Token ${{ secrets.defectdojo_api_key }}" \
+            -F "scan_type=SARIF" \
+            -F "file=@semgrep-results.sarif" \
+            -F "product_name=${{ inputs.defectdojo_product_name }}" \
+            -F "engagement_name=sast-scan-${{ github.sha }}" \
+            -F "active=true" \
+            -F "verified=true" \
+            -F "close_old_findings=true"
