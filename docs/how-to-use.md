@@ -117,7 +117,7 @@ In the repo being onboarded, Settings → Secrets and variables → Actions:
 
 ### Step 2 — Call the reusable workflow
 
-Add a job to that repo's CI workflow (PR-triggered) and CD workflow (push-to-default-branch-triggered):
+[`examples/consumer-workflows/ci.yml`](../examples/consumer-workflows/ci.yml) and [`cd.yml`](../examples/consumer-workflows/cd.yml) in this repo are complete, ready-to-copy files showing exactly this wiring — copy them into the repo being onboarded and adjust to fit its existing CI/CD shape. The core of it, added as a job to that repo's CI workflow (PR-triggered) and CD workflow (push-to-default-branch-triggered):
 
 ```yaml
 jobs:

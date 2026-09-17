@@ -45,7 +45,15 @@ All five apps run in one Container Apps Environment (`cae-<name_prefix>`), share
 - **`modules/platform/`** — the actual Terraform resources, as a reusable module. No backend, no provider config — compose it into your own Terraform with `module { source = "github.com/cipherfort/sbom-vulnmgmt-platform//modules/platform" }` if you'd rather not use this repo's own deployable example.
 - **`examples/standalone/`** — the deployable root that most people actually want: a thin wrapper calling `modules/platform`, with the real backend/provider config and `terraform.tfvars.example`. **All `terraform` commands below run from this directory.**
 
-## Bootstrap (manual, one-time)
+## Quickstart
+
+```bash
+./scripts/bootstrap.sh --github-owner <you> --github-repo <repo> --name-prefix <yours>
+```
+
+Automates the manual Bootstrap steps below (state storage, OIDC App Registration, workload resource group, RBAC) and prints the GitHub secrets to set — skip to step 4 below using its output. Safe to re-run. See `./scripts/bootstrap.sh --help` for options, and `scripts/teardown-bootstrap.sh` to undo it.
+
+## Bootstrap (manual, one-time) — what the script does, if you'd rather do it by hand or understand it
 
 Uses the standard GitHub Actions OIDC pattern for authenticating to Azure without a long-lived credential: an Azure AD App Registration with federated credentials trusting your GitHub repo/branch, RBAC-scoped to just what this platform needs.
 

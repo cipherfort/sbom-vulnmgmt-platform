@@ -1,0 +1,37 @@
+# Example CI workflow for a repo onboarding to this platform. Copy into
+# your own repo's .github/workflows/, adjust the trigger/job names to fit
+# your existing CI, and set the repo secrets/variables listed in
+# docs/how-to-use.md §4 Step 1 of the platform repo.
+#
+# This is the PR-triggered half — see cd.yml for the default-branch half
+# (which sets import_to_defectdojo: true).
+
+name: CI
+
+on:
+  pull_request:
+
+jobs:
+  sbom-scan:
+    uses: cipherfort/sbom-vulnmgmt-platform/.github/workflows/sbom-scan.yml@main
+    with:
+      sbom_type: terraform # or: npm — see docs/how-to-use.md §4 Step 3
+      project_name: ${{ github.event.repository.name }}
+      project_version: pr-${{ github.event.pull_request.number }}
+      dependency_track_url: ${{ vars.DEPENDENCY_TRACK_URL }}
+      defectdojo_url: ${{ vars.DEFECTDOJO_URL }}
+      defectdojo_product_name: ${{ vars.DEFECTDOJO_PRODUCT_NAME }}
+      import_to_defectdojo: false # only true on the default-branch run — see cd.yml
+    secrets:
+      dependency_track_api_key: ${{ secrets.DEPENDENCY_TRACK_API_KEY }}
+      defectdojo_api_key: ${{ secrets.DEFECTDOJO_API_KEY }}
+
+  secret-scan:
+    permissions:
+      security-events: write
+    uses: cipherfort/sbom-vulnmgmt-platform/.github/workflows/secret-scan.yml@main
+    with:
+      defectdojo_url: ${{ vars.DEFECTDOJO_URL }}
+      defectdojo_product_name: ${{ vars.DEFECTDOJO_PRODUCT_NAME }}
+    secrets:
+      defectdojo_api_key: ${{ secrets.DEFECTDOJO_API_KEY }}
