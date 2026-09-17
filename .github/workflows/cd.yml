@@ -37,6 +37,10 @@ jobs:
     environment:
       name: security-platform
 
+    defaults:
+      run:
+        working-directory: examples/standalone
+
     steps:
       - uses: actions/checkout@v4
 

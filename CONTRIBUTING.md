@@ -9,12 +9,15 @@ Fork the repo, create a branch, and open a pull request against `main`. Small, f
 ## Before submitting a PR
 
 ```bash
-terraform fmt -recursive -check -diff   # formatting
-terraform init -backend=false           # validates config without needing a real backend
-terraform validate
+terraform fmt -recursive -check -diff .   # formatting, from repo root
+
+# This repo has two Terraform roots — the reusable module and the
+# deployable example that calls it — each needs its own init/validate:
+(cd modules/platform && terraform init -backend=false && terraform validate)
+(cd examples/standalone && terraform init -backend=false && terraform validate)
 ```
 
-Both should pass cleanly.
+All three should pass cleanly.
 
 ## Testing changes
 

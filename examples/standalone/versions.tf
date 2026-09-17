@@ -3,10 +3,7 @@ terraform {
 
   required_providers {
     azurerm = {
-      source = "hashicorp/azurerm"
-      # Pinned to the 4.x line — azurerm 5.x renames several arguments used
-      # here (e.g. enable_rbac_authorization -> rbac_authorization_enabled).
-      # Bump deliberately and update those references if you move to 5.x.
+      source  = "hashicorp/azurerm"
       version = "~> 4.12"
     }
     random = {
@@ -16,7 +13,8 @@ terraform {
   }
 
   # Storage account referenced here must exist before `terraform init` —
-  # see README "Bootstrap" step 1. Placeholder names below.
+  # see README "Bootstrap" step 1 (or run scripts/bootstrap.sh). Placeholder
+  # names below.
   backend "azurerm" {
     resource_group_name  = "rg-tfstate-security-platform"
     storage_account_name = "stsecplatstate001"

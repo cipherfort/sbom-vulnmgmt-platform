@@ -30,7 +30,7 @@ Dependency-Track           https://<dtrack-frontend-url>          "is this compo
 DefectDojo                 https://<defectdojo-url>                "who owns fixing it, by when?"
 
 Both hosted in this repo's Terraform, on Azure Container Apps.
-Get the real URLs with:  terraform output dependency_track_url / dependency_track_api_url / defectdojo_url
+Get the real URLs with (from examples/standalone/):  terraform output dependency_track_url / dependency_track_api_url / defectdojo_url
 ```
 
 **One rule of thumb for where to work:** Dependency-Track tells you *whether* something is vulnerable and keeps that answer current automatically. DefectDojo is where a human decides *what to do about it*. Don't triage inside Dependency-Track — findings live there only long enough to get exported into DefectDojo.
@@ -108,8 +108,8 @@ In the repo being onboarded, Settings → Secrets and variables → Actions:
 
 | Type | Name | Value |
 |---|---|---|
-| Variable | `DEPENDENCY_TRACK_URL` | the apiserver URL (`terraform output dependency_track_api_url` in this repo) |
-| Variable | `DEFECTDOJO_URL` | `terraform output defectdojo_url` |
+| Variable | `DEPENDENCY_TRACK_URL` | the apiserver URL (`terraform output dependency_track_api_url`, run from `examples/standalone/` in this repo) |
+| Variable | `DEFECTDOJO_URL` | `terraform output defectdojo_url` (same directory) |
 | Variable | `DEFECTDOJO_PRODUCT_NAME` | pick a name for this repo's DefectDojo product |
 | Secret | `DEPENDENCY_TRACK_API_KEY` | from Dependency-Track, see §2 |
 | Secret | `DEFECTDOJO_API_KEY` | from the target user's DefectDojo API v2 Key page |
@@ -270,7 +270,7 @@ Consider wrapping this as a `make sbom` target in your own repos for consistency
 |---|---|
 | `DEPENDENCY_TRACK_API_KEY` | Dependency-Track → Administration → Access Management → Teams → team → API Keys → regenerate. Update the secret in every consuming repo. |
 | `DEFECTDOJO_API_KEY` | DefectDojo → user menu → API v2 Key → regenerate. Update the secret in every consuming repo. |
-| Postgres/Redis/DefectDojo secret-key material in Key Vault | These are Terraform-generated (`random_password`). Rotating means changing the resource in Terraform (e.g. `terraform taint random_password.postgres_admin` then `apply`) — this will restart the affected app(s) with a new credential. Do this deliberately, not as a routine task; it causes a brief outage of that component. |
+| Postgres/Redis/DefectDojo secret-key material in Key Vault | These are Terraform-generated (`random_password`). Rotating means forcing recreation of the resource (e.g., from `examples/standalone/`: `terraform apply -replace='module.platform.random_password.postgres_admin'`) — this will restart the affected app(s) with a new credential. Do this deliberately, not as a routine task; it causes a brief outage of that component. |
 
 ---
 

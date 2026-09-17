@@ -39,13 +39,18 @@ One product/engagement per repo — a single pane for vulnerability management a
 
 All five apps run in one Container Apps Environment (`cae-<name_prefix>`), share one PostgreSQL Flexible Server (two databases), and pull secrets from one Key Vault (`kv-<name_prefix>-*`) via user-assigned managed identities — no secrets in Terraform state beyond what Azure itself requires, no secrets in git. `<name_prefix>` is whatever you set for the `name_prefix` variable, letting multiple deployments coexist in one subscription/tenant without name collisions.
 
+## Repo layout
+
+- **`modules/platform/`** — the actual Terraform resources, as a reusable module. No backend, no provider config — compose it into your own Terraform with `module { source = "github.com/cipherfort/sbom-vulnmgmt-platform//modules/platform" }` if you'd rather not use this repo's own deployable example.
+- **`examples/standalone/`** — the deployable root that most people actually want: a thin wrapper calling `modules/platform`, with the real backend/provider config and `terraform.tfvars.example`. **All `terraform` commands below run from this directory.**
+
 ## Bootstrap (manual, one-time)
 
 Uses the standard GitHub Actions OIDC pattern for authenticating to Azure without a long-lived credential: an Azure AD App Registration with federated credentials trusting your GitHub repo/branch, RBAC-scoped to just what this platform needs.
 
-**The Terraform state storage names below (`rg-tfstate-security-platform`, `stsecplatstate001`) and the App Registration name (`sp-security-platform-github-actions`) are examples, not requirements — pick your own naming and update `versions.tf`'s `backend` block to match.** Terraform backend blocks can't reference variables, so this is a manual find-and-replace, not something you set once in a `.tfvars` file. The workload resource group (`rg-<name_prefix>`) is different — that one's driven by the `name_prefix` variable (see step 3), not hardcoded.
+**The Terraform state storage names below (`rg-tfstate-security-platform`, `stsecplatstate001`) and the App Registration name (`sp-security-platform-github-actions`) are examples, not requirements — pick your own naming and update `examples/standalone/versions.tf`'s `backend` block to match.** Terraform backend blocks can't reference variables, so this is a manual find-and-replace, not something you set once in a `.tfvars` file. The workload resource group (`rg-<name_prefix>`) is different — that one's driven by the `name_prefix` variable (see step 3), not hardcoded.
 
-1. **Create the Terraform state storage** (referenced by `versions.tf`'s backend block — update the placeholder names there if you use different ones):
+1. **Create the Terraform state storage** (referenced by `examples/standalone/versions.tf`'s backend block — update the placeholder names there if you use different ones):
    ```bash
    az group create --name rg-tfstate-security-platform --location uksouth
    az storage account create \
