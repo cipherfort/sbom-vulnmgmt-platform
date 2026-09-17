@@ -264,7 +264,7 @@ Once you're past initial rollout, a few things worth tracking:
 |---|---|---|
 | Ingress is public HTTPS by default | IP allowlist (see README's "Known gaps" for the tradeoff with GitHub-hosted CI runners) | Container Apps ingress itself has no private-only option in this repo — only Postgres/Key Vault do, via `enable_private_networking` |
 | Postgres/Key Vault reachable from any Azure service by default | `enable_private_networking = true` moves both onto a VNet with private endpoints | Not the default, since it requires a delegated-subnet-capable region and adds real setup complexity |
-| No HA | Single Postgres/Redis instance, `min_replicas=1` everywhere | Revisit once real usage is known |
+| No HA by default for Postgres/Container Apps | `high_availability_enabled = true` gives zone-redundant Postgres + 2 replicas everywhere | Not the default since it requires a General Purpose Postgres SKU (real cost increase) — Redis already runs HA by default regardless |
 | No tested backup/restore | Postgres's built-in 7-day retention | Run a restore drill before this holds anything business-critical |
 | Bicep repos have no dependency-level SBOM coverage | Checkov/PSRule cover misconfig; `image-scan.yml` covers referenced container images | No mitigation for registry-module provenance risk today — accepted, see §6 |
 | `image-scan.yml`'s `image_refs` is manually maintained | Documented in `how-to-use.md` §5b | Could drift from what a template actually references; revisit auto-discovery once real template patterns are known |

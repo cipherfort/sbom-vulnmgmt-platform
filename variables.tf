@@ -54,3 +54,9 @@ variable "enable_private_networking" {
   type        = bool
   default     = false
 }
+
+variable "high_availability_enabled" {
+  description = "Enables zone-redundant HA for PostgreSQL (requires switching off the Burstable SKU) and doubles min_replicas on every Container App. Does not affect Redis, which already runs HA by default regardless of this flag."
+  type        = bool
+  default     = false
+}

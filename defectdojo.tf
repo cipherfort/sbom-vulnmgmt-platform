@@ -74,8 +74,8 @@ resource "azurerm_container_app" "defectdojo_web" {
   }
 
   template {
-    min_replicas = 1
-    max_replicas = 1
+    min_replicas = var.high_availability_enabled ? 2 : 1
+    max_replicas = var.high_availability_enabled ? 2 : 1
 
     # Upstream docker-compose runs this as a separate one-shot "initializer"
     # service (same image, different entrypoint) that runs Django migrations
@@ -244,8 +244,8 @@ resource "azurerm_container_app" "defectdojo_celeryworker" {
   }
 
   template {
-    min_replicas = 1
-    max_replicas = 1
+    min_replicas = var.high_availability_enabled ? 2 : 1
+    max_replicas = var.high_availability_enabled ? 2 : 1
 
     container {
       name    = "celeryworker"
@@ -309,8 +309,8 @@ resource "azurerm_container_app" "defectdojo_celerybeat" {
   }
 
   template {
-    min_replicas = 1
-    max_replicas = 1
+    min_replicas = var.high_availability_enabled ? 2 : 1
+    max_replicas = var.high_availability_enabled ? 2 : 1
 
     container {
       name    = "celerybeat"

@@ -17,7 +17,14 @@ resource "azurerm_postgresql_flexible_server" "this" {
   resource_group_name = azurerm_resource_group.this.name
   location            = azurerm_resource_group.this.location
 
-  sku_name   = "B_Standard_B1ms"
+  # HA requires swapping off the Burstable SKU — confirmed against the real
+  # Azure API, which rejects it outright ("HANotSupportedForBurstableSku...
+  # High availability not supported for burstable server"), despite `az
+  # postgres flexible-server list-skus` generically listing ZoneRedundant
+  # as a supported HA mode for Standard_B1ms in this capability schema.
+  # That capability listing doesn't validate this specific SKU+HA
+  # combination — trust the provisioning-time rejection, not the schema.
+  sku_name   = var.high_availability_enabled ? "GP_Standard_D2s_v3" : "B_Standard_B1ms"
   storage_mb = 32768
   version    = "16"
 
@@ -31,6 +38,21 @@ resource "azurerm_postgresql_flexible_server" "this" {
   delegated_subnet_id           = var.enable_private_networking ? azurerm_subnet.postgres[0].id : null
   private_dns_zone_id           = var.enable_private_networking ? azurerm_private_dns_zone.postgres[0].id : null
   public_network_access_enabled = !var.enable_private_networking
+
+  # standby_availability_zone must be set explicitly, even though it's
+  # Optional in the schema — it's not Computed, so leaving it unset makes
+  # Terraform treat "unset" as "should be null" on every subsequent plan,
+  # generating a perpetual invalid modify against whatever zone Azure
+  # actually assigned (confirmed via a real apply: the resulting error is
+  # "an existing high_availability.0.standby_availability_zone can only be
+  # changed when exchanged with the zone specified in zone").
+  dynamic "high_availability" {
+    for_each = var.high_availability_enabled ? [1] : []
+    content {
+      mode                      = "ZoneRedundant"
+      standby_availability_zone = "2"
+    }
+  }
 }
 
 resource "azurerm_postgresql_flexible_server_database" "dtrack" {

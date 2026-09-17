@@ -27,3 +27,4 @@ admin_email = "admin@example.com"
 # dtrack_image_tag          = "4.12.4"
 # defectdojo_image_tag      = "2.42.1"
 # enable_private_networking = false
+# high_availability_enabled = false

@@ -8,6 +8,10 @@ resource "azurerm_managed_redis" "defectdojo" {
 
   sku_name = "Balanced_B0"
 
+  # high_availability_enabled defaults to true on this resource (confirmed
+  # against the provider's own docs) and is intentionally left unset here
+  # to preserve that default. NOT tied to var.high_availability_enabled —
+  # this Redis has run HA the whole time regardless of that flag.
   default_database {
     access_keys_authentication_enabled = true
 

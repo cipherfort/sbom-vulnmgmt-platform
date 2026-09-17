@@ -36,8 +36,8 @@ resource "azurerm_container_app" "dtrack_apiserver" {
   }
 
   template {
-    min_replicas = 1
-    max_replicas = 1
+    min_replicas = var.high_availability_enabled ? 2 : 1
+    max_replicas = var.high_availability_enabled ? 2 : 1
 
     container {
       name   = "dtrack-apiserver"
@@ -110,8 +110,8 @@ resource "azurerm_container_app" "dtrack_frontend" {
   workload_profile_name        = var.enable_private_networking ? "Consumption" : null
 
   template {
-    min_replicas = 1
-    max_replicas = 1
+    min_replicas = var.high_availability_enabled ? 2 : 1
+    max_replicas = var.high_availability_enabled ? 2 : 1
 
     container {
       name   = "dtrack-frontend"
