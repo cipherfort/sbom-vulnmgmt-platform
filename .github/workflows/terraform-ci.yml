@@ -1,0 +1,81 @@
+name: Terraform CI
+
+# Validates this repo's own Terraform on every PR. None of these four jobs
+# need Azure credentials (fmt/validate use -backend=false; tflint/checkov are
+# static analyzers), so this workflow runs safely on PRs from forks with
+# zero secrets configured.
+
+on:
+  pull_request:
+    paths:
+      - "modules/**"
+      - "examples/**"
+      - ".github/workflows/terraform-ci.yml"
+      - ".tflint.hcl"
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.10.3"
+      - run: terraform fmt -check -recursive -diff .
+
+  validate:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        root: [modules/platform, examples/standalone]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.10.3"
+      - working-directory: ${{ matrix.root }}
+        run: |
+          terraform init -backend=false
+          terraform validate
+
+  tflint:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        root: [modules/platform, examples/standalone]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: terraform-linters/setup-tflint@v6
+        with:
+          tflint_version: latest
+      - working-directory: ${{ matrix.root }}
+        run: |
+          tflint --init --config "${GITHUB_WORKSPACE}/.tflint.hcl"
+          tflint --config "${GITHUB_WORKSPACE}/.tflint.hcl"
+
+  checkov:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        root: [modules/platform, examples/standalone]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Checkov scan
+        uses: bridgecrewio/checkov-action@v12.1347.0
+        with:
+          directory: ${{ matrix.root }}
+          framework: terraform
+          output_format: sarif
+          soft_fail: true # non-blocking initially — flip to false once the first real findings are triaged
+      - uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: results/results_sarif.sarif
+          category: checkov-${{ matrix.root }}

@@ -2,6 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 ![Terraform](https://img.shields.io/badge/terraform-%3E%3D1.10.0-623CE4?logo=terraform&logoColor=white)
+[![Terraform CI](https://github.com/cipherfort/sbom-vulnmgmt-platform/actions/workflows/terraform-ci.yml/badge.svg)](https://github.com/cipherfort/sbom-vulnmgmt-platform/actions/workflows/terraform-ci.yml)
 
 Terraform to self-host a shared SBOM ingestion + vulnerability management platform: **Dependency-Track** (SBOM ingestion, continuous CVE monitoring) feeding **DefectDojo**, which is the **single pane across every onboarded repo and finding type** — Terraform/npm SCA, Checkov misconfiguration, and Trivy image findings all land there. Consumed by CI via two reusable workflows: [`.github/workflows/sbom-scan.yml`](.github/workflows/sbom-scan.yml) (Terraform/npm repos) and [`.github/workflows/image-scan.yml`](.github/workflows/image-scan.yml) (container images referenced from Bicep or any other repo, via Trivy).
 
