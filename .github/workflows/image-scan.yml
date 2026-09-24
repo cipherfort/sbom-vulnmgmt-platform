@@ -99,7 +99,17 @@ jobs:
       # follow-up decision (in GHAS's own branch-protection rules, once
       # SARIF is landing there), not baked in here.
       - name: Trivy scan
-        uses: aquasecurity/trivy-action@0.28.0
+        # Pinned by commit SHA, not a mutable tag, per GHSA-69fq-xp46-6x23 /
+        # CVE-2026-33634: in March 2026 an attacker with compromised
+        # credentials force-pushed 76 of 77 trivy-action version tags
+        # (0.0.1-0.34.2, which includes the @0.28.0 this pin replaced) to
+        # malicious commits containing a credential-stealing infostealer
+        # that ran before the actual Trivy scan. This repo's copy was never
+        # actually invoked during the exposure window (Mar 19-20 2026) —
+        # confirmed via `gh run list`, this reusable workflow had zero runs
+        # at the time — so no secret rotation was needed here, just the fix.
+        # v0.36.0 is a release published after the compromise was contained.
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: ${{ matrix.image }}
           format: sarif
