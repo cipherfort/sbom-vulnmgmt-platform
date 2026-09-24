@@ -9,6 +9,7 @@ name: Reusable SBOM Scan
 #     dependency_track_url: ${{ vars.DEPENDENCY_TRACK_URL }}
 #     defectdojo_url: ${{ vars.DEFECTDOJO_URL }}                    # omit to skip the DefectDojo import job
 #     defectdojo_product_name: ${{ vars.DEFECTDOJO_PRODUCT_NAME }}
+#     defectdojo_product_type_name: ${{ vars.DEFECTDOJO_PRODUCT_TYPE_NAME }}  # only needed until the product exists — see input description
 #     import_to_defectdojo: true                                    # typically only on the default-branch run
 #   secrets:
 #     dependency_track_api_key: ${{ secrets.DEPENDENCY_TRACK_API_KEY }}
@@ -16,12 +17,11 @@ name: Reusable SBOM Scan
 #
 # Not wired up for Bicep repos on purpose — a CycloneDX SBOM has little value
 # without a package manager behind it. Use Checkov/PSRule for those instead.
-
 on:
   workflow_call:
     inputs:
       sbom_type:
-        description: "cdxgen project type: terraform | npm"
+        description: "terraform (custom lock-file parser, not cdxgen — see comment above) | npm (cdxgen)"
         type: string
         required: true
       project_name:
@@ -41,6 +41,10 @@ on:
         type: string
         default: ""
       defectdojo_product_name:
+        type: string
+        default: ""
+      defectdojo_product_type_name:
+        description: "DefectDojo Product Type to file a brand-new product under (every DefectDojo product needs one). Only required until defectdojo_product_name's product already exists — after that, auto_create_context ignores it. Leave unset once onboarded."
         type: string
         default: ""
       import_to_defectdojo:
@@ -64,12 +68,107 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
+        if: inputs.sbom_type == 'npm'
         with:
           node-version: "20"
 
-      - name: Generate CycloneDX SBOM
+      - name: Generate CycloneDX SBOM (npm)
+        if: inputs.sbom_type == 'npm'
         working-directory: ${{ inputs.working_directory }}
-        run: npx --yes @cyclonedx/cdxgen@10 -t ${{ inputs.sbom_type }} -o bom.json .
+        run: npx --yes @cyclonedx/cdxgen@10 -t npm -o bom.json .
+
+      - uses: hashicorp/setup-terraform@v3
+        if: inputs.sbom_type == 'terraform'
+        with:
+          terraform_wrapper: false
+
+      - name: Resolve providers (populates .terraform.lock.hcl if not already committed)
+        if: inputs.sbom_type == 'terraform'
+        working-directory: ${{ inputs.working_directory }}
+        run: terraform init -backend=false -input=false
+
+      - name: Generate CycloneDX SBOM (terraform)
+        if: inputs.sbom_type == 'terraform'
+        working-directory: ${{ inputs.working_directory }}
+        run: |
+          python3 - .terraform.lock.hcl bom.json <<'PYEOF'
+          import json, re, sys, uuid, urllib.request
+
+          lock_path, out_path = sys.argv[1], sys.argv[2]
+
+          with open(lock_path) as f:
+              content = f.read()
+
+          provider_re = re.compile(r'provider\s+"([^"]+)"\s*\{(.*?)\n\}', re.DOTALL)
+          version_re = re.compile(r'version\s*=\s*"([^"]+)"')
+          hash_re = re.compile(r'"(h1:[^"]+)"')
+
+
+          def registry_source(namespace, ptype):
+              url = f"https://registry.terraform.io/v1/providers/{namespace}/{ptype}"
+              try:
+                  with urllib.request.urlopen(url, timeout=10) as resp:
+                      data = json.load(resp)
+                      source = data.get("source", "")
+                      if source.startswith("https://github.com/"):
+                          return source[len("https://github.com/"):]
+              except Exception as e:
+                  print(f"::warning::Registry lookup failed for {namespace}/{ptype}: {e}", file=sys.stderr)
+              return None
+
+
+          components = []
+          for m in provider_re.finditer(content):
+              address = m.group(1)
+              block = m.group(2)
+              vm = version_re.search(block)
+              if not vm:
+                  continue
+              version = vm.group(1)
+              hashes = hash_re.findall(block)
+
+              parts = address.split("/")
+              if len(parts) != 3:
+                  continue
+              host, namespace, ptype = parts
+
+              if host == "registry.terraform.io":
+                  gh_path = registry_source(namespace, ptype) or f"{namespace}/terraform-provider-{ptype}"
+                  gh_owner, gh_repo = gh_path.split("/", 1)
+                  purl = f"pkg:golang/github.com/{gh_owner}/{gh_repo}@v{version}"
+                  group, name = gh_owner, gh_repo
+              else:
+                  purl = f"pkg:generic/{host}/{namespace}/{ptype}@{version}"
+                  group, name = namespace, ptype
+
+              props = [{"name": "terraform:provider_address", "value": address}]
+              if hashes:
+                  props.append({"name": "terraform:lock_hash", "value": hashes[0]})
+
+              components.append({
+                  "type": "library",
+                  "group": group,
+                  "name": name,
+                  "version": version,
+                  "purl": purl,
+                  "properties": props,
+              })
+
+          bom = {
+              "bomFormat": "CycloneDX",
+              "specVersion": "1.5",
+              "serialNumber": f"urn:uuid:{uuid.uuid4()}",
+              "version": 1,
+              "components": components,
+          }
+
+          with open(out_path, "w") as f:
+              json.dump(bom, f, indent=2)
+
+          print(f"Wrote {len(components)} provider components to {out_path}")
+          if not components:
+              print("::warning::No provider components found in .terraform.lock.hcl")
+          PYEOF
 
       - uses: actions/upload-artifact@v4
         with:
@@ -100,8 +199,27 @@ jobs:
       DD_URL: ${{ inputs.defectdojo_url }}
       DD_API_KEY: ${{ secrets.defectdojo_api_key }}
       DD_PRODUCT_NAME: ${{ inputs.defectdojo_product_name }}
+      DD_PRODUCT_TYPE_NAME: ${{ inputs.defectdojo_product_type_name }}
 
     steps:
+      - name: Normalize server URLs
+        # dependency_track_url/defectdojo_url are documented (and consumed by
+        # gh-upload-sbom's `serverhostname` input above) as bare hostnames,
+        # but every other step here builds full request URLs from them
+        # directly. Without a scheme, curl silently defaults to plain
+        # http://, which Azure Container Apps' HTTPS-only ingress won't
+        # serve — the lookup below then just returns nothing until the
+        # 600s timeout, instead of failing loudly. Normalize once here so
+        # this works whether the variable was set with or without a scheme.
+        run: |
+          set -euo pipefail
+          normalize() {
+            local url="${1%/}"
+            [[ "$url" =~ ^https?:// ]] && echo "$url" || echo "https://$url"
+          }
+          echo "DT_URL=$(normalize "$DT_URL")" >> "$GITHUB_ENV"
+          echo "DD_URL=$(normalize "$DD_URL")" >> "$GITHUB_ENV"
+
       - name: Wait for Dependency-Track BOM processing
         id: dtrack
         run: |
@@ -135,14 +253,43 @@ jobs:
           PROJECT_UUID: ${{ steps.dtrack.outputs.project_uuid }}
         run: |
           set -euo pipefail
-          curl -sf -H "X-Api-Key: $DT_API_KEY" \
-            "$DT_URL/api/v1/finding/project/$PROJECT_UUID/export" -o findings.json
-          curl -sf -X POST "$DD_URL/api/v2/import-scan/" \
-            -H "Authorization: Token $DD_API_KEY" \
-            -F "scan_type=Dependency Track Finding Packaging Format" \
-            -F "file=@findings.json" \
-            -F "product_name=$DD_PRODUCT_NAME" \
-            -F "engagement_name=cd-${{ github.sha }}" \
-            -F "active=true" \
-            -F "verified=true" \
+
+          export_status=$(curl -s -o findings.json -w '%{http_code}' \
+            -H "X-Api-Key: $DT_API_KEY" \
+            "$DT_URL/api/v1/finding/project/$PROJECT_UUID/export")
+          if [ "$export_status" -ge 400 ]; then
+            echo "::error::Dependency-Track finding export failed (HTTP $export_status)"
+            cat findings.json
+            exit 1
+          fi
+
+          # auto_create_context: DefectDojo returns 400 on import if the
+          # product/engagement named below don't already exist, unless this
+          # is set — required for a product's first-ever import (like this
+          # self-test), harmless once it exists on later runs. A brand-new
+          # product also needs a Product Type (DD_PRODUCT_TYPE_NAME) to file
+          # under; once the product exists, DefectDojo ignores it, so it's
+          # only needed for onboarding.
+          import_args=(
+            -F "scan_type=Dependency Track Finding Packaging Format (FPF) Export"
+            -F "file=@findings.json"
+            -F "product_name=$DD_PRODUCT_NAME"
+            -F "engagement_name=cd-${{ github.sha }}"
+            -F "auto_create_context=true"
+            -F "active=true"
+            -F "verified=true"
             -F "close_old_findings=true"
+          )
+          if [ -n "$DD_PRODUCT_TYPE_NAME" ]; then
+            import_args+=(-F "product_type_name=$DD_PRODUCT_TYPE_NAME")
+          fi
+
+          import_status=$(curl -s -o import-response.json -w '%{http_code}' -X POST "$DD_URL/api/v2/import-scan/" \
+            -H "Authorization: Token $DD_API_KEY" \
+            "${import_args[@]}")
+          if [ "$import_status" -ge 400 ]; then
+            echo "::error::DefectDojo import failed (HTTP $import_status)"
+            cat import-response.json
+            exit 1
+          fi
+          echo "DefectDojo import succeeded (HTTP $import_status)"

@@ -64,7 +64,8 @@ Once a project exists, Dependency-Track re-checks its components against vulnera
 Administration → Access Management → Teams → create or use a team → **Permissions**, grant at least:
 - `BOM_UPLOAD` — required for CI to push SBOMs
 - `PROJECT_CREATION_UUID` — required for `autocreate: true` in the upload action to work
-- `VIEW_PORTFOLIO` — required for the `defectdojo-import` job's project lookup and finding export
+- `VIEW_PORTFOLIO` — required for the `defectdojo-import` job's project lookup
+- `VIEW_VULNERABILITY` — required for the `defectdojo-import` job's finding export; a key with only `VIEW_PORTFOLIO` can find the project but gets a 403 from `/api/v1/finding/project/{uuid}/export`
 
 Then **API Keys** on that same team → generate → this is the value for the `DEPENDENCY_TRACK_API_KEY` secret in every onboarded repo. (Permission names above are current as of the image tag pinned in `variables.tf` — double-check against your instance's Administration UI if they've been renamed since.)
 
@@ -109,6 +110,7 @@ In the repo being onboarded, Settings → Secrets and variables → Actions:
 | Variable | `DEPENDENCY_TRACK_URL` | the apiserver URL (`terraform output dependency_track_api_url` in this repo) |
 | Variable | `DEFECTDOJO_URL` | `terraform output defectdojo_url` |
 | Variable | `DEFECTDOJO_PRODUCT_NAME` | pick a name for this repo's DefectDojo product |
+| Variable | `DEFECTDOJO_PRODUCT_TYPE_NAME` | an existing (or new) DefectDojo Product Type — only needed until the product above exists for the first time; every DefectDojo product needs one to be auto-created under |
 | Secret | `DEPENDENCY_TRACK_API_KEY` | from Dependency-Track, see §2 |
 | Secret | `DEFECTDOJO_API_KEY` | from the target user's DefectDojo API v2 Key page |
 
@@ -127,6 +129,7 @@ jobs:
       dependency_track_url: ${{ vars.DEPENDENCY_TRACK_URL }}
       defectdojo_url: ${{ vars.DEFECTDOJO_URL }}
       defectdojo_product_name: ${{ vars.DEFECTDOJO_PRODUCT_NAME }}
+      defectdojo_product_type_name: ${{ vars.DEFECTDOJO_PRODUCT_TYPE_NAME }} # only needed until the product exists — see step 1
       import_to_defectdojo: false                        # true only on the CD/main-branch call — see step 3
     secrets:
       dependency_track_api_key: ${{ secrets.DEPENDENCY_TRACK_API_KEY }}
@@ -179,9 +182,33 @@ jobs:
 
 **Repo is the AWS Landing Zone Accelerator (CDK/npm)** — mechanically identical to a Terraform repo, just `sbom_type: npm` instead of `terraform`, and it needs `package-lock.json` committed (see §4, Step 3). Slot the job in alongside whatever `cdk synth`/`cdk diff`/`cdk deploy` steps that repo's pipeline already has; there's no interaction between them — it's an independent job like Checkov is in the pilot's `ci.yml`.
 
+### Step 6 — GitHub-native coverage: Dependabot alerts (optional)
+
+`sbom-scan.yml` covers Terraform/npm dependencies, and `image-scan.yml` (§5b) covers container images — but neither sees a risk GitHub's own dependency graph already tracks for you, most notably a compromised or vulnerable **pinned GitHub Actions version** (the kind of supply-chain incident that's hit widely-used actions before). GitHub surfaces this as a Dependabot alert automatically; [`.github/workflows/dependabot-import.yml`](../.github/workflows/dependabot-import.yml) just pulls those alerts into DefectDojo so they show up in the same single pane as everything else, instead of only being visible in each repo's own Security tab.
+
+This intentionally bypasses Dependency-Track — GitHub's own SBOM export is SPDX format, and Dependency-Track only ingests CycloneDX, so there's no clean path through it. DefectDojo has a purpose-built `Github Vulnerability Scan` importer that consumes GitHub's Dependabot-alerts GraphQL response directly, so that's the route this workflow takes.
+
+Applies to any repo, not just Terraform/npm ones — add it independently of `sbom_type`:
+
+```yaml
+jobs:
+  dependabot-import:
+    permissions:
+      security-events: read   # required — GITHUB_TOKEN can't read Dependabot alerts without this
+    uses: sg-cloud-platform/cps-security-platform-infra/.github/workflows/dependabot-import.yml@main
+    with:
+      defectdojo_url: ${{ vars.DEFECTDOJO_URL }}
+      defectdojo_product_name: ${{ vars.DEFECTDOJO_PRODUCT_NAME }}
+      defectdojo_product_type_name: ${{ vars.DEFECTDOJO_PRODUCT_TYPE_NAME }}  # only needed until the product exists — see §4, Step 1
+    secrets:
+      defectdojo_api_key: ${{ secrets.DEFECTDOJO_API_KEY }}
+```
+
+Same `security-events` permission-passthrough rule as `image-scan.yml` (§5b, step 3) applies: the reusable workflow declaring `permissions: security-events: read` in its own job isn't enough by itself — the *calling* job must grant it too, or the Dependabot-alerts fetch 403s. Run this on a schedule or on the default-branch push, not every PR — alert state doesn't change per-PR, so there's nothing to gain from running it more often.
+
 ### Pin the reusable workflow reference deliberately, once past the pilot
 
-Every example above uses `@main`. That's the right choice while this platform is a single pilot repo being proven out — but once several repos depend on `sbom-scan.yml`/`image-scan.yml`, a change to either file on `main` changes behavior in every consuming repo simultaneously, with no warning and no chance to test it against one repo first. Once onboarding moves past the pilot:
+Every example above uses `@main`. That's the right choice while this platform is a single pilot repo being proven out — but once several repos depend on `sbom-scan.yml`/`image-scan.yml`/`dependabot-import.yml`, a change to any of them on `main` changes behavior in every consuming repo simultaneously, with no warning and no chance to test it against one repo first. Once onboarding moves past the pilot:
 
 - Tag releases of this repo (`v1`, `v2`, ...) and have new consumers reference `@v1` instead of `@main`
 - Bump each consumer's pin deliberately when you cut a new tag, rather than letting every repo silently pick up whatever's newest on `main`
@@ -287,13 +314,16 @@ It's gated on three things: the SBOM upload succeeding, `inputs.import_to_defect
 This polls `/api/v1/project/lookup?name=...&version=...` — the `project_name`/`project_version` inputs passed to the workflow must **exactly** match what the upload step used. A common cause is passing a different `project_version` between the upload job and this job (e.g. a typo, or forgetting `pr-` prefix consistency).
 
 ### DefectDojo import returns a 400
-Usually means `product_name` doesn't match an existing product and DefectDojo isn't configured to auto-create one — create the product once manually, or check your DefectDojo instance's "Enable Auto Create for Import" system setting.
+Both `sbom-scan.yml`'s and `dependabot-import.yml`'s import steps already pass `auto_create_context=true`, so a brand-new product/engagement being created for the first time isn't the usual cause anymore. Check the printed response body (both steps now print it on failure instead of just exiting) — the two real causes seen so far: (1) `defectdojo_product_type_name` wasn't set for a genuinely new product (DefectDojo needs a Product Type to file a new product under, even with auto-create on), or (2) the `scan_type` string sent doesn't match your DefectDojo version's registered choices exactly — confirm the exact string against `dojo/tools/<parser>/parser.py`'s `get_scan_types()` in the DefectDojo source at your pinned `defectdojo_image_tag`, don't assume it matches an older or newer version.
 
 ### Two Dependency-Track projects for what I think is one repo
 Expected if you're comparing a `pr-<number>` project against `main` — see §2. Not expected if you see two `main` projects; that usually means `project_name` drifted (e.g. the repo was renamed on GitHub after onboarding). Fix by aligning `project_name` back to the current repo name and deleting the orphaned project.
 
 ### `image-scan.yml`'s "Upload SARIF to GitHub Security tab" step fails
 Almost always a missing permission — the calling job must declare `permissions: security-events: write` itself (see §5b, step 3). A reusable workflow can never grant itself more than the caller hands it, regardless of what `image-scan.yml`'s own job-level `permissions:` says.
+
+### `dependabot-import.yml`'s "Fetch open Dependabot alerts" step 403s
+Same permission-passthrough rule as `image-scan.yml` above — the *calling* job must declare `permissions: security-events: read` itself, not just the reusable workflow's own job. If it still 403s after that's set correctly, the automatic `GITHUB_TOKEN` genuinely can't read this repo's Dependabot alerts (this wasn't guaranteed by GitHub's docs and needed a real test to confirm either way) — the fallback is a PAT or GitHub App installation token with Dependabot-alerts read access, passed as its own secret instead of relying on `GITHUB_TOKEN`.
 
 ### Checkov's SARIF upload in `ci.yml` fails with "file not found"
 `bridgecrewio/checkov-action`'s SARIF output path (`results/results_sarif.sarif`) is a convention, not a guarantee across action versions — if this breaks after bumping the pinned `checkov-action` version, check that release's actual output path and update the `sarif_file` input in the "Upload SARIF to GitHub Security tab" step to match.

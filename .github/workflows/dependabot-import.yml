@@ -1,0 +1,198 @@
+name: Reusable Dependabot Alert Import
+
+# Called from other repos as:
+#   jobs:
+#     dependabot-import:
+#       permissions:
+#         security-events: read   # required — GITHUB_TOKEN can't read Dependabot alerts without this, and a
+#                                  # reusable workflow can never grant itself more than the caller hands it
+#       uses: sg-cloud-platform/cps-security-platform-infra/.github/workflows/dependabot-import.yml@main
+#       with:
+#         defectdojo_url: ${{ vars.DEFECTDOJO_URL }}
+#         defectdojo_product_name: ${{ vars.DEFECTDOJO_PRODUCT_NAME }}
+#         defectdojo_product_type_name: ${{ vars.DEFECTDOJO_PRODUCT_TYPE_NAME }}  # only needed until the product exists
+#       secrets:
+#         defectdojo_api_key: ${{ secrets.DEFECTDOJO_API_KEY }}
+#
+# This exists for the risk neither sbom-scan.yml nor image-scan.yml can see:
+# a supply-chain problem in something GitHub itself tracks the dependency
+# graph for — most notably pinned GitHub Actions versions (GitHub's
+# dependency graph treats Actions used in workflows as its own ecosystem),
+# but also any other ecosystem GitHub's own scanning already covers.
+# Dependency-Track can't ingest this directly — GitHub's native SBOM export
+# is SPDX, and Dependency-Track is CycloneDX-only. Going straight to
+# DefectDojo via its built-in "Github Vulnerability Scan" importer (which
+# consumes GitHub's Dependabot alerts GraphQL response verbatim) avoids
+# that dead end entirely and mirrors the SARIF dual-write pattern used by
+# image-scan.yml: GitHub's own Security tab already shows these alerts,
+# this just keeps DefectDojo the single pane across every finding type.
+#
+# Only OPEN alerts are fetched — close_old_findings on the import below
+# already handles marking findings inactive once GitHub no longer reports
+# them, same as every other importer in this platform.
+
+on:
+  workflow_call:
+    inputs:
+      defectdojo_url:
+        type: string
+        required: true
+      defectdojo_product_name:
+        type: string
+        required: true
+      defectdojo_product_type_name:
+        description: "DefectDojo Product Type to file a brand-new product under (every DefectDojo product needs one). Only required until defectdojo_product_name's product already exists — after that, auto_create_context ignores it."
+        type: string
+        default: ""
+    secrets:
+      defectdojo_api_key:
+        required: true
+
+jobs:
+  dependabot-import:
+    name: Import Dependabot Alerts to DefectDojo
+    runs-on: cps-ubuntu-latest-private
+    permissions:
+      security-events: read
+
+    env:
+      DD_URL: ${{ inputs.defectdojo_url }}
+      DD_API_KEY: ${{ secrets.defectdojo_api_key }}
+      DD_PRODUCT_NAME: ${{ inputs.defectdojo_product_name }}
+      DD_PRODUCT_TYPE_NAME: ${{ inputs.defectdojo_product_type_name }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      - name: Normalize DefectDojo URL
+        run: |
+          set -euo pipefail
+          normalize() {
+            local url="${1%/}"
+            [[ "$url" =~ ^https?:// ]] && echo "$url" || echo "https://$url"
+          }
+          echo "DD_URL=$(normalize "$DD_URL")" >> "$GITHUB_ENV"
+
+      - name: Fetch open Dependabot alerts (GraphQL)
+        run: |
+          python3 - "${{ github.repository }}" <<'PYEOF'
+          import json, os, sys, urllib.request
+
+          owner, name = sys.argv[1].split("/", 1)
+          token = os.environ["GH_TOKEN"]
+
+          query = """
+          query($owner: String!, $name: String!, $cursor: String) {
+            repository(owner: $owner, name: $name) {
+              nameWithOwner
+              url
+              vulnerabilityAlerts(first: 100, after: $cursor, states: [OPEN]) {
+                pageInfo { hasNextPage endCursor }
+                nodes {
+                  id
+                  number
+                  state
+                  createdAt
+                  vulnerableManifestPath
+                  vulnerableRequirements
+                  securityVulnerability {
+                    severity
+                    package { name }
+                    advisory {
+                      summary
+                      description
+                      references { url }
+                      identifiers { value }
+                      cvss { score vectorString }
+                      cwes(first: 10) { nodes { cweId } }
+                    }
+                  }
+                }
+              }
+            }
+          }
+          """
+
+          all_nodes = []
+          repo_meta = {}
+          cursor = None
+
+          while True:
+              body = json.dumps(
+                  {"query": query, "variables": {"owner": owner, "name": name, "cursor": cursor}}
+              ).encode()
+              req = urllib.request.Request(
+                  "https://api.github.com/graphql",
+                  data=body,
+                  headers={
+                      "Authorization": f"Bearer {token}",
+                      "Content-Type": "application/json",
+                      "Accept": "application/vnd.github+json",
+                  },
+              )
+              with urllib.request.urlopen(req, timeout=30) as resp:
+                  result = json.load(resp)
+
+              if result.get("errors"):
+                  print(f"::error::GitHub GraphQL error: {result['errors']}", file=sys.stderr)
+                  sys.exit(1)
+
+              repo = result["data"]["repository"]
+              repo_meta = {"nameWithOwner": repo["nameWithOwner"], "url": repo["url"]}
+              alerts = repo["vulnerabilityAlerts"]
+              all_nodes.extend(alerts["nodes"])
+
+              if alerts["pageInfo"]["hasNextPage"]:
+                  cursor = alerts["pageInfo"]["endCursor"]
+              else:
+                  break
+
+          out = {
+              "data": {
+                  "repository": {
+                      **repo_meta,
+                      "vulnerabilityAlerts": {"nodes": all_nodes},
+                  }
+              }
+          }
+
+          with open("dependabot-alerts.json", "w") as f:
+              json.dump(out, f, indent=2)
+
+          print(f"Fetched {len(all_nodes)} open Dependabot alert(s)")
+          PYEOF
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dependabot-alerts-${{ github.sha }}
+          path: dependabot-alerts.json
+          retention-days: 30
+
+      - name: Import into DefectDojo
+        run: |
+          set -euo pipefail
+
+          # auto_create_context / product_type_name: see sbom-scan.yml's
+          # identical DefectDojo import step for why both are needed.
+          import_args=(
+            -F "scan_type=Github Vulnerability Scan"
+            -F "file=@dependabot-alerts.json"
+            -F "product_name=$DD_PRODUCT_NAME"
+            -F "engagement_name=dependabot-${{ github.sha }}"
+            -F "auto_create_context=true"
+            -F "active=true"
+            -F "verified=true"
+            -F "close_old_findings=true"
+          )
+          if [ -n "$DD_PRODUCT_TYPE_NAME" ]; then
+            import_args+=(-F "product_type_name=$DD_PRODUCT_TYPE_NAME")
+          fi
+
+          import_status=$(curl -s -o import-response.json -w '%{http_code}' -X POST "$DD_URL/api/v2/import-scan/" \
+            -H "Authorization: Token $DD_API_KEY" \
+            "${import_args[@]}")
+          if [ "$import_status" -ge 400 ]; then
+            echo "::error::DefectDojo import failed (HTTP $import_status)"
+            cat import-response.json
+            exit 1
+          fi
+          echo "DefectDojo import succeeded (HTTP $import_status)"

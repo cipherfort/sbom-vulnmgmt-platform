@@ -1,0 +1,39 @@
+# Sample CI workflow for a repo onboarding to this platform.
+#
+# Copy into <your-new-repo>/.github/workflows/ci.yml, replace <your-org>/
+# <your-repo> below with wherever THIS platform repo actually lives, and
+# set these on the repo being onboarded (Settings > Secrets and variables
+# > Actions):
+#
+#   Variables: DEPENDENCY_TRACK_URL, DEFECTDOJO_URL, DEFECTDOJO_PRODUCT_NAME
+#   Secrets:   DEPENDENCY_TRACK_API_KEY, DEFECTDOJO_API_KEY
+#
+# This is the PR-triggered half. project_version is versioned per-PR
+# (pr-<number>) so you can compare a PR's dependencies against main before
+# merging, and import_to_defectdojo stays false here — findings tracking
+# should reflect what's actually deployed, not every open PR. See cd.yml
+# for the merge-triggered half, which flips both of those.
+
+name: CI
+
+on:
+  pull_request:
+
+jobs:
+  sbom-scan:
+    uses: <your-org>/<your-repo>/.github/workflows/sbom-scan.yml@main
+    with:
+      sbom_type: terraform # or: npm — see docs/how-to-use.md §4 Step 3
+      project_name: ${{ github.event.repository.name }}
+      project_version: pr-${{ github.event.pull_request.number }}
+      dependency_track_url: ${{ vars.DEPENDENCY_TRACK_URL }}
+      defectdojo_url: ${{ vars.DEFECTDOJO_URL }}
+      defectdojo_product_name: ${{ vars.DEFECTDOJO_PRODUCT_NAME }}
+      import_to_defectdojo: false
+    secrets:
+      dependency_track_api_key: ${{ secrets.DEPENDENCY_TRACK_API_KEY }}
+      defectdojo_api_key: ${{ secrets.DEFECTDOJO_API_KEY }}
+
+  # Whatever this repo's existing PR checks are — Checkov, lint, tests —
+  # keep running as their own independent jobs alongside sbom-scan. Not
+  # replicated here since they're specific to the repo being onboarded.

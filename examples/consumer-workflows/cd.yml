@@ -1,0 +1,52 @@
+# Sample CD workflow for a repo onboarding to this platform.
+#
+# Copy into <your-new-repo>/.github/workflows/cd.yml, replace <your-org>/
+# <your-repo> below with wherever THIS platform repo actually lives — same
+# secrets/variables as ci.yml (see that file's header).
+#
+# This is the default-branch half. The only two differences from ci.yml:
+# project_version is "main" instead of "pr-<number>", and
+# import_to_defectdojo is true — this is the call that actually creates
+# findings in DefectDojo, once a change has actually merged.
+
+name: CD
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  sbom-scan:
+    uses: <your-org>/<your-repo>/.github/workflows/sbom-scan.yml@main
+    with:
+      sbom_type: terraform # or: npm — see docs/how-to-use.md §4 Step 3
+      project_name: ${{ github.event.repository.name }}
+      project_version: main
+      dependency_track_url: ${{ vars.DEPENDENCY_TRACK_URL }}
+      defectdojo_url: ${{ vars.DEFECTDOJO_URL }}
+      defectdojo_product_name: ${{ vars.DEFECTDOJO_PRODUCT_NAME }}
+      defectdojo_product_type_name: ${{ vars.DEFECTDOJO_PRODUCT_TYPE_NAME }} # only needed until this product exists in DefectDojo for the first time
+      import_to_defectdojo: true
+    secrets:
+      dependency_track_api_key: ${{ secrets.DEPENDENCY_TRACK_API_KEY }}
+      defectdojo_api_key: ${{ secrets.DEFECTDOJO_API_KEY }}
+
+  # Optional — pulls this repo's Dependabot alerts (pinned GitHub Actions
+  # versions included) into the same DefectDojo pane. Independent of
+  # sbom_type; see docs/how-to-use.md §4 Step 6. Runs on push-to-main only,
+  # not per-PR — alert state doesn't change per-PR.
+  dependabot-import:
+    permissions:
+      security-events: read # required — GITHUB_TOKEN can't read Dependabot alerts without this
+    uses: <your-org>/<your-repo>/.github/workflows/dependabot-import.yml@main
+    with:
+      defectdojo_url: ${{ vars.DEFECTDOJO_URL }}
+      defectdojo_product_name: ${{ vars.DEFECTDOJO_PRODUCT_NAME }}
+      defectdojo_product_type_name: ${{ vars.DEFECTDOJO_PRODUCT_TYPE_NAME }} # only needed until this product exists in DefectDojo for the first time
+    secrets:
+      defectdojo_api_key: ${{ secrets.DEFECTDOJO_API_KEY }}
+
+  # Whatever this repo's existing deploy steps are (terraform apply, cdk
+  # deploy, ...) keep running as their own independent job(s) alongside
+  # sbom-scan. Not replicated here since they're specific to the repo
+  # being onboarded.

@@ -1,0 +1,37 @@
+# One-off manual test of the dependabot-import.yml reusable workflow,
+# against this repo's own (real) Dependabot alerts. Calls the reusable
+# workflow via a same-repo relative path, so it works regardless of what
+# this repo's actual GitHub org/name is.
+#
+# Run it: Actions tab -> "Test Dependabot Import" -> Run workflow.
+#
+# The main thing this test is actually checking: whether the automatic
+# GITHUB_TOKEN, scoped down to just `security-events: read` below, is
+# enough to read this repo's Dependabot alerts via GraphQL — that wasn't
+# confirmed from GitHub's docs alone. If this job 403s on the "Fetch open
+# Dependabot alerts" step, GITHUB_TOKEN can't do it and a PAT/GitHub App
+# token with Dependabot-alerts read access would be needed instead.
+#
+# Requires these set on THIS repo (Settings > Secrets and variables >
+# Actions) before running:
+#   Variables: DEFECTDOJO_URL, DEFECTDOJO_PRODUCT_NAME,
+#              DEFECTDOJO_PRODUCT_TYPE_NAME (only needed until the product
+#              below exists in DefectDojo for the first time)
+#   Secrets:   DEFECTDOJO_API_KEY
+
+name: Test Dependabot Import
+
+on:
+  workflow_dispatch:
+
+jobs:
+  dependabot-import:
+    permissions:
+      security-events: read
+    uses: ./.github/workflows/dependabot-import.yml
+    with:
+      defectdojo_url: ${{ vars.DEFECTDOJO_URL }}
+      defectdojo_product_name: sbom-vulnmgmt-platform-selftest
+      defectdojo_product_type_name: ${{ vars.DEFECTDOJO_PRODUCT_TYPE_NAME }}
+    secrets:
+      defectdojo_api_key: ${{ secrets.DEFECTDOJO_API_KEY }}
