@@ -1,0 +1,81 @@
+name: Reusable Container Image SBOM
+
+# Phase 3 (F7): build-time SBOMs for container images.
+#
+# Called from a repo that builds an image as:
+#   jobs:
+#     sbom:
+#       permissions:
+#         contents: write   # required — the dependency submission API needs it
+#       uses: sg-cloud-platform/cps-security-platform-infra/.github/workflows/container-sbom.yml@main
+#       with:
+#         image: myacr.azurecr.io/app@sha256:...   # digest, not a mutable tag
+#         acr_login: true
+#         acr_name: myacr
+#       secrets:
+#         azure_client_id: ${{ secrets.AZURE_CLIENT_ID }}
+#         azure_tenant_id: ${{ secrets.AZURE_TENANT_ID }}
+#         azure_subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+#
+# Syft scans the image and submits the result to GitHub's dependency
+# submission API, so the image's OS packages and libraries appear in the
+# repo's dependency graph. The enterprise collector already exports that
+# graph nightly, so the image lands in Dependency-Track and Sentinel with
+# no platform change. Only default-branch submissions show in the
+# dependency graph (and so in the collector's SBOM): call this from the
+# default-branch build, not from every PR.
+on:
+  workflow_call:
+    inputs:
+      image:
+        description: "Image reference to scan, ideally by digest"
+        type: string
+        required: true
+      acr_login:
+        description: "Log into an Azure Container Registry before scanning (needed for private ACR images)"
+        type: boolean
+        default: false
+      acr_name:
+        description: "ACR name (without .azurecr.io) — required if acr_login is true"
+        type: string
+        default: ""
+      runs_on:
+        type: string
+        default: cps-ubuntu-latest-private
+    secrets:
+      azure_client_id:
+        required: false
+      azure_tenant_id:
+        required: false
+      azure_subscription_id:
+        required: false
+
+jobs:
+  container-sbom:
+    name: Image SBOM to dependency graph
+    runs-on: ${{ inputs.runs_on }}
+    permissions:
+      contents: write
+      id-token: write # azure/login OIDC, only used when acr_login is true
+
+    steps:
+      - uses: azure/login@v2
+        if: inputs.acr_login
+        with:
+          client-id: ${{ secrets.azure_client_id }}
+          tenant-id: ${{ secrets.azure_tenant_id }}
+          subscription-id: ${{ secrets.azure_subscription_id }}
+
+      - name: ACR login
+        if: inputs.acr_login
+        run: az acr login --name "${{ inputs.acr_name }}"
+
+      - name: Syft SBOM and dependency snapshot
+        # Pinned by commit SHA, as with trivy-action in image-scan.yml.
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          image: ${{ inputs.image }}
+          format: spdx-json
+          dependency-snapshot: true
+          artifact-name: image-sbom-${{ github.run_id }}.spdx.json
+          upload-release-assets: false

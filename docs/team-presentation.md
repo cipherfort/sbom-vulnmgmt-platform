@@ -1,4 +1,6 @@
 # SBOM & Vulnerability Management — Team Presentation
+
+> **Superseded (27 Oct 2026).** This deck describes the ADR-0001 platform (per-repo CI uploads, Dependency-Track feeding DefectDojo). The platform is being rebuilt as an enterprise-wide collector with Dependency-Track only — see [ADR-0002](adr/0002-enterprise-sbom-platform.md) and the [delivery plan](enterprise-sbom/delivery-plan.md). Kept as a record of the earlier tool comparison.
 ### CipherFort Cloud Platform · Security Engineering
 
 ---

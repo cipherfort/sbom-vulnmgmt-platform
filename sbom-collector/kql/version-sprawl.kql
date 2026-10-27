@@ -1,0 +1,5 @@
+// Version sprawl: same package, many versions across the estate
+SbomLatest
+| summarize Versions = dcount(PackageVersion), Repos = dcount(strcat(Org, "/", Repo)) by Ecosystem, PackageName
+| where Versions > 3
+| top 25 by Repos

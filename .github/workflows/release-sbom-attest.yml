@@ -1,0 +1,69 @@
+name: Reusable Release SBOM Attestation
+
+# Phase 3: release-time SBOM, signed as an artifact attestation bound to the
+# image digest — the answer to "the SBOM shows the default branch, not what
+# is deployed" in the design doc's risk table.
+#
+# Called from a release job as:
+#   jobs:
+#     attest:
+#       permissions:
+#         contents: read
+#         id-token: write       # Sigstore signing
+#         attestations: write   # store the attestation on the repo
+#         packages: write       # only with push_to_registry on GHCR
+#       uses: sg-cloud-platform/cps-security-platform-infra/.github/workflows/release-sbom-attest.yml@main
+#       with:
+#         image_name: ghcr.io/org/app
+#         image_digest: sha256:...
+#         push_to_registry: true
+#
+# Verify later with:
+#   gh attestation verify oci://<image_name>@<image_digest> --owner <org> \
+#     --predicate-type https://spdx.dev/Document/v2.3
+on:
+  workflow_call:
+    inputs:
+      image_name:
+        description: "Fully qualified image name without tag or digest"
+        type: string
+        required: true
+      image_digest:
+        description: "sha256:... digest of the released image"
+        type: string
+        required: true
+      push_to_registry:
+        description: "Also push the attestation to the image registry"
+        type: boolean
+        default: false
+      runs_on:
+        type: string
+        default: cps-ubuntu-latest-private
+
+jobs:
+  attest:
+    name: Attest release SBOM
+    runs-on: ${{ inputs.runs_on }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      packages: write
+
+    steps:
+      - name: Syft SBOM
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          image: ${{ inputs.image_name }}@${{ inputs.image_digest }}
+          format: spdx-json
+          output-file: release.spdx.json
+          artifact-name: release-sbom-${{ github.run_id }}.spdx.json
+          upload-release-assets: false
+
+      - name: Attest
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-name: ${{ inputs.image_name }}
+          subject-digest: ${{ inputs.image_digest }}
+          sbom-path: release.spdx.json
+          push-to-registry: ${{ inputs.push_to_registry }}

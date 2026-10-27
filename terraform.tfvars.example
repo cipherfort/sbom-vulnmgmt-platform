@@ -1,16 +1,49 @@
 # Copy this file to terraform.tfvars and fill in values for your environment.
-# terraform.tfvars is gitignored — never commit real values.
+# terraform.tfvars is gitignored — never commit real values. In CI these
+# come from the TF_VARS_JSON secret (see README, Bootstrap step 4).
 
-# CIDR ranges allowed to reach the Dependency-Track and DefectDojo ingress.
-# Required — no default. Example below uses an RFC 5737 documentation
-# range; replace with your own office/VPN egress ranges (and the
-# self-hosted runner's egress, if you're using cps-ubuntu-latest-private
-# rather than switching the workflows to ubuntu-latest).
-allowed_ip_ranges = [
-  "203.0.113.0/24",
-]
+# ---------- Landing zone (Phase 0: confirm subscription, VNet, subnets) ----------
+vnet_id                    = "/subscriptions/<sub>/resourceGroups/<lz-rg>/providers/Microsoft.Network/virtualNetworks/<vnet>"
+function_subnet_id         = "/subscriptions/<sub>/resourceGroups/<lz-rg>/providers/Microsoft.Network/virtualNetworks/<vnet>/subnets/snet-sbom-func"
+container_apps_subnet_id   = "/subscriptions/<sub>/resourceGroups/<lz-rg>/providers/Microsoft.Network/virtualNetworks/<vnet>/subnets/snet-sbom-cae"
+private_endpoint_subnet_id = "/subscriptions/<sub>/resourceGroups/<lz-rg>/providers/Microsoft.Network/virtualNetworks/<vnet>/subnets/snet-sbom-pe"
 
-# Optional overrides — defaults shown, uncomment to change:
-# location             = "uksouth"
-# dtrack_image_tag     = "4.12.4"
-# defectdojo_image_tag = "2.42.1"
+private_dns_zone_ids = {
+  vault    = "/subscriptions/<sub>/resourceGroups/<dns-rg>/providers/Microsoft.Network/privateDnsZones/privatelink.vaultcore.azure.net"
+  blob     = "/subscriptions/<sub>/resourceGroups/<dns-rg>/providers/Microsoft.Network/privateDnsZones/privatelink.blob.core.windows.net"
+  queue    = "/subscriptions/<sub>/resourceGroups/<dns-rg>/providers/Microsoft.Network/privateDnsZones/privatelink.queue.core.windows.net"
+  table    = "/subscriptions/<sub>/resourceGroups/<dns-rg>/providers/Microsoft.Network/privateDnsZones/privatelink.table.core.windows.net"
+  file     = "/subscriptions/<sub>/resourceGroups/<dns-rg>/providers/Microsoft.Network/privateDnsZones/privatelink.file.core.windows.net"
+  postgres = "/subscriptions/<sub>/resourceGroups/<dns-rg>/providers/Microsoft.Network/privateDnsZones/privatelink.postgres.database.azure.com"
+}
+
+# Only if the runner can't reach the Key Vault private endpoint. RFC 5737
+# documentation range below — replace.
+# deployer_ip_ranges = ["203.0.113.10/32"]
+
+# ---------- CPS Sentinel workspace ----------
+cps_workspace_id = "/subscriptions/<sub>/resourceGroups/<ws-rg>/providers/Microsoft.OperationalInsights/workspaces/<ws>"
+
+# ---------- GitHub ----------
+github_enterprise_slug = "<enterprise-slug>"
+github_app_id          = "123456" # cps-sbom-collector
+
+# Phase 2 — leave empty until cps-app-installer exists.
+# github_installer_app_id          = "123457"
+# github_installer_installation_id = "9876543"
+
+alert_email = "cps-platform@example.org"
+
+# ---------- Phase 2 ----------
+# manage_entra = true                       # needs Graph permissions on the deployer
+# sbom_orgs    = ["cps", "team-a", "team-b"]
+# dtrack_oidc_client_id = "<app-reg-client-id>"   # only when manage_entra = false
+
+# banned_packages = [
+#   { PackageName = "event-stream", Reason = "Compromised 2018 (flatmap-stream)" },
+# ]
+
+# ---------- Optional overrides (defaults shown) ----------
+# environment        = "prd"
+# global_name_suffix = ""
+# dtrack_image_tag   = "4.14.6"

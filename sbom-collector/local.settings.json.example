@@ -1,0 +1,17 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "FUNCTIONS_WORKER_RUNTIME": "python",
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "SbomStorage": "UseDevelopmentStorage=true",
+    "SBOM_STORAGE_ACCOUNT": "devstoreaccount1",
+    "GITHUB_APP_ID": "123456",
+    "GITHUB_INSTALLER_APP_ID": "",
+    "GITHUB_INSTALLER_INSTALLATION_ID": "",
+    "GITHUB_ENTERPRISE": "<enterprise-slug>",
+    "KEY_VAULT_URL": "https://kv-sbom-prd.vault.azure.net/",
+    "DTRACK_URL": "https://ca-dtrack-api.<env-domain>",
+    "DCE_ENDPOINT": "",
+    "DCR_IMMUTABLE_ID": ""
+  }
+}

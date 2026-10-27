@@ -1,4 +1,4 @@
-name: Security Platform CD
+name: SBOM Platform CD
 
 on:
   push:
@@ -13,13 +13,12 @@ on:
         options: [plan, apply]
 
 env:
-  TERRAFORM_VERSION: "1.10.3"
+  TERRAFORM_VERSION: "1.11.4"
   TF_PLUGIN_CACHE_DIR: ~/.terraform.d/plugin-cache
   ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
   ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
   ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
   ARM_USE_OIDC: true
-  TF_VAR_allowed_ip_ranges: ${{ secrets.ALLOWED_IP_RANGES }}
 
 permissions:
   id-token: write
@@ -58,6 +57,14 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
+      # Landing-zone IDs, workspace ID, GitHub App ID etc. — none secret, but
+      # environment-specific, so they live in one secret rather than in git.
+      # Shape: terraform.tfvars.example as JSON.
+      - name: Write terraform.tfvars.json
+        env:
+          TF_VARS_JSON: ${{ secrets.TF_VARS_JSON }}
+        run: printf '%s' "$TF_VARS_JSON" > terraform.tfvars.json
+
       - name: Terraform Init
         run: terraform init -no-color
 
@@ -76,7 +83,7 @@ jobs:
           script: |
             const status = '${{ steps.plan.outcome }}' === 'success' ? '✅ Success' : '❌ Failed';
             await core.summary
-              .addHeading(`Security Platform ${status}`)
+              .addHeading(`SBOM Platform ${status}`)
               .addTable([
                 [{data: 'Field', header: true}, {data: 'Value', header: true}],
                 ['SHA',       '${{ github.sha }}'],
@@ -84,3 +91,45 @@ jobs:
                 ['Timestamp', new Date().toISOString()],
               ])
               .write();
+
+  collector-deploy:
+    name: Deploy SBOM collector
+    needs: terraform
+    if: github.event_name == 'push' || github.event.inputs.action == 'apply'
+    runs-on: cps-ubuntu-latest-private
+
+    concurrency:
+      group: sbom-collector
+      cancel-in-progress: false
+
+    environment:
+      name: security-platform
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11" # must match the Function App runtime_version
+
+      # Dependencies are installed here, not by a remote build: a remote build
+      # would need the Function's VNet to reach PyPI.
+      - name: Package
+        working-directory: sbom-collector
+        run: pip install --target .python_packages/lib/site-packages -r requirements.txt
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy
+        # Pinned by commit SHA, as with trivy-action in image-scan.yml.
+        uses: Azure/functions-action@c5060b3b8bb1ebbcb531abd00c822ecbaa8ea656 # v1.5.7
+        with:
+          app-name: ${{ vars.FUNCTION_APP_NAME }}
+          package: sbom-collector
+          sku: flexconsumption
+          respect-funcignore: true
+          remote-build: false

@@ -1,0 +1,7 @@
+// Analytics rule: any repo running a package on the BannedPackages watchlist.
+SbomLatest
+| join kind=inner (
+    _GetWatchlist("BannedPackages")
+    | project PackageName = tostring(SearchKey), Reason = tostring(Reason)
+  ) on PackageName
+| project Org, Repo, Branch, PackageName, PackageVersion, Purl, Reason

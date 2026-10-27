@@ -1,0 +1,4 @@
+// Licence watch (F6)
+SbomLatest
+| where License has_any ("AGPL", "SSPL", "GPL-3.0")
+| summarize Repos = dcount(strcat(Org, "/", Repo)), Examples = make_set(PackageName, 10) by Org, License

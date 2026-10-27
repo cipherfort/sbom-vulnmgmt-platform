@@ -1,105 +1,125 @@
-# Security Platform Infra
+# CPS Enterprise SBOM Platform
 
-Terraform for the team's shared SBOM + vulnerability management platform: **Dependency-Track** (SBOM ingestion, continuous CVE monitoring) feeding **DefectDojo**, which is the **single pane across every onboarded repo and finding type** — Terraform/npm SCA, Checkov misconfiguration, and Trivy image findings all land there. Consumed by CI in the IaC repos via two reusable workflows: [`.github/workflows/sbom-scan.yml`](.github/workflows/sbom-scan.yml) (Terraform/npm repos — starting with `cps-azure-policy-as-code-terraform`) and [`.github/workflows/image-scan.yml`](.github/workflows/image-scan.yml) (container images referenced from Bicep or any other repo, via Trivy).
+One Azure-hosted collector pulls GitHub's dependency-graph SBOM for every repository in every org of our GitHub Enterprise Cloud account each night. The SBOMs go to three places:
+- **OWASP Dependency-Track**, where each team sees its own components, licences and vulnerabilities.
+- **Microsoft Sentinel**, where CPS answers "where do we run package X?" in one KQL query.
+- **Blob storage**, for 13 months of history.
 
-This platform exists specifically to cover what **GitHub Advanced Security (GHAS) Enterprise — already licensed — does not**: Terraform providers have no Dependabot/Dependency-Graph support at all (verified against current GitHub docs, not assumed). Checkov and Trivy findings are **dual-written** — SARIF to GHAS's native Security tab (free, gives PR-native annotations) *and* to DefectDojo (so DefectDojo stays authoritative across everything, not just Dependency-Track's findings). See [ADR-0001](docs/adr/0001-sbom-and-vulnerability-management-platform.md).
+**Status: built on branch, not deployed.** Nothing here has been applied. What is left to do, phase by phase, is in [`docs/enterprise-sbom/delivery-plan.md`](docs/enterprise-sbom/delivery-plan.md).
 
-Deployed on Azure Container Apps — chosen over AKS/a VM because this is two lightly-loaded, CI-driven internal tools, not a growing workload; revisit if that changes.
+| Read | For |
+|---|---|
+| [ADR-0002](docs/adr/0002-enterprise-sbom-platform.md) | The decision, and where the build departs from the design doc |
+| [Delivery plan](docs/enterprise-sbom/delivery-plan.md) | Phase 0–3 checklists, corrections to the design doc, open questions |
+| [How to use](docs/how-to-use.md) | Operating model, onboarding an org, Terraform CI path, failure runbook |
 
-**Status: scaffolded, not yet deployed.** Nothing here has been applied. Do the manual bootstrap below, review the Terraform, then apply.
-
-**For the team / decision record:** [`docs/team-presentation.md`](docs/team-presentation.md) covers the problem statement, tool-landscape comparison, and rollout plan. [`docs/adr/0001-sbom-and-vulnerability-management-platform.md`](docs/adr/0001-sbom-and-vulnerability-management-platform.md) is the formal decision record.
-
-**For day-to-day use:** [`docs/how-to-use.md`](docs/how-to-use.md) — operating Dependency-Track and DefectDojo, onboarding another repo, and how Bicep repos are handled differently.
+This replaces the earlier per-repo platform with DefectDojo ([ADR-0001](docs/adr/0001-sbom-and-vulnerability-management-platform.md), superseded).
 
 ---
 
 ## Architecture
 
 ```
-GitHub Actions (any onboarded repo)
-    │  cdxgen → bom.json → upload
-    ▼
-Dependency-Track (ca-dtrack-api, ca-dtrack-frontend)
-    │  Postgres "dtrack" database
-    │  continuous CVE re-scoring
-    ▼
-GitHub Actions polls DT → exports findings → imports into
-    ▼
-DefectDojo (ca-defectdojo-web [uwsgi+nginx], celeryworker, celerybeat)
-    │  Postgres "defectdojo" database, Redis broker
-    ▼
-One product/engagement per repo — the team's single vuln-management pane
+GitHub Enterprise Cloud
+  every org ── cps-sbom-baseline (dependency graph enforced)
+            ── cps-sbom-collector App (read-only)  ◄── cps-app-installer adds it to new orgs
+        │ list repos · generate-report → fetch-report (async)
+        ▼
+rg-sbom-prd (UK South, landing-zone VNet, private endpoints)
+  func-sbom-prd (Flex Consumption, Python 3.11)
+    enumerate_repos  02:00 UTC ─► sbom-work queue ─► collect_sbom (re-queues while GitHub builds)
+    sync_dtrack_acl  04:30 UTC   report_poison_depth /15 min   install_collector_on_new_orgs Mon 03:00
+        │
+        ├─► stsbomprd/sbom-raw            raw SPDX, versioned, Cool 30 d, delete 13 months
+        ├─► Dependency-Track 4.14          cae-sbom-prd (internal) · ca-dtrack-api/ui · psql-dtrack-prd
+        │     <org> parent ─ <org>/<repo>  (collector)  ─ <org>/<repo>/terraform  (sbom-scan.yml)
+        └─► CPS Sentinel workspace         GitHubSbom_CL · GitHubSbomRun_CL · SbomLatest · workbook · rule
 ```
 
-All five apps run in one Container Apps Environment (`cae-security-platform`), share one PostgreSQL Flexible Server (two databases), and pull secrets from one Key Vault (`kv-secplat-*`) via user-assigned managed identities — no secrets in Terraform state beyond what Azure itself requires, no secrets in git.
+Every Azure hop uses a managed identity. The only long-lived secrets are the GitHub App private keys and the Dependency-Track API keys, all in `kv-sbom-prd`.
+
+## What is where
+
+| Path | What |
+|---|---|
+| `main.tf`, `variables.tf`, `outputs.tf`, `versions.tf` | Root module. Reads the pre-created `rg-sbom-<env>`; checks it is in a UK region |
+| `keyvault.tf`, `storage.tf`, `postgres.tf` | Key Vault, collector storage, Dependency-Track `/data` share, Postgres. All behind private endpoints |
+| `dependency_track.tf` | Internal Container Apps environment (workload profiles), API server and frontend, private DNS for the environment |
+| `collector.tf` | Function App, its identity and roles, Application Insights |
+| `sentinel.tf` | Custom tables, DCE/DCR, `SbomLatest`, workbook, `BannedPackages` watchlist, analytics rule |
+| `monitoring.tf` | Action group, poison-queue and enumeration alerts, diagnostic settings |
+| `entra.tf` | Optional (`manage_entra`): Entra groups and the Dependency-Track app registration |
+| `tests/plan.tftest.hcl` | Full plan against mocked providers (`terraform test`) |
+| `sbom-collector/` | The Function App: `function_app.py`, `convert.py` (SPDX → CycloneDX), `dtrack.py`, tests, KQL |
+| `sbom-collector/ops/dtrack_admin.py` | Dependency-Track bootstrap, org onboarding, ACL sync |
+| `scripts/github/security-config.sh` | Creates and applies the `cps-sbom-baseline` enterprise security configuration |
+| `.github/workflows/` | `cd.yml` (Terraform + collector deploy), `sbom-collector-ci.yml`, and the reusable `sbom-scan.yml`, `image-scan.yml`, `container-sbom.yml`, `release-sbom-attest.yml` |
 
 ## Bootstrap (manual, one-time)
 
-Mirrors how `cps-azure-policy-as-code-terraform` bootstraps its own Azure account access — see that repo's `docs/github-actions-setup.md` for the pattern this follows.
-
-1. **Create the Terraform state storage** (referenced by `versions.tf`'s backend block — update the placeholder names there if you use different ones):
+1. **Terraform state storage.** Reuses the existing account; the state key is `sbom-platform.tfstate`:
    ```bash
    az group create --name rg-tfstate-security-platform --location uksouth
-   az storage account create \
-     --name stsecplatstate001 \
-     --resource-group rg-tfstate-security-platform \
-     --location uksouth --sku Standard_LRS --kind StorageV2 \
-     --allow-blob-public-access false --https-only true
-   az storage container create \
-     --name terraform-state --account-name stsecplatstate001 --auth-mode login
+   az storage account create --name stsecplatstate001 --resource-group rg-tfstate-security-platform \
+     --location uksouth --sku Standard_LRS --kind StorageV2 --allow-blob-public-access false --https-only true
+   az storage container create --name terraform-state --account-name stsecplatstate001 --auth-mode login
    ```
 
-2. **App Registration + OIDC federated credentials**, same two-credential pattern as the policy repo (`pull_request` won't apply here since this repo has no CI-plan-on-PR workflow yet — just add the `branch:main` credential for `cd.yml`):
+2. **Deployer identity with an OIDC federated credential for `main`:**
    ```bash
-   az ad app create --display-name "sp-security-platform-github-actions"
-   APP_ID=$(az ad app list --display-name "sp-security-platform-github-actions" --query '[0].appId' -o tsv)
+   az ad app create --display-name "sp-sbom-platform-github-actions"
+   APP_ID=$(az ad app list --display-name "sp-sbom-platform-github-actions" --query '[0].appId' -o tsv)
    az ad sp create --id "$APP_ID"
    az ad app federated-credential create --id "$APP_ID" --parameters '{
-     "name": "secplat-cd-main",
+     "name": "sbom-cd-main",
      "issuer": "https://token.actions.githubusercontent.com",
      "subject": "repo:sg-cloud-platform/cps-security-platform-infra:ref:refs/heads/main",
      "audiences": ["api://AzureADTokenExchange"]
    }'
+   SP=$(az ad sp show --id "$APP_ID" --query id -o tsv)
    ```
 
-3. **RBAC** — `Contributor` on a dedicated resource group is simplest here (unlike the policy repo, this workload owns real infrastructure, not just policy assignments):
+3. **Resource group and roles.** Terraform creates role assignments, so Contributor alone is not enough:
    ```bash
-   az group create --name rg-security-platform --location uksouth
-   SP_OBJECT_ID=$(az ad sp show --id "$APP_ID" --query id -o tsv)
-   az role assignment create --assignee "$SP_OBJECT_ID" --role "Contributor" \
-     --scope "/subscriptions/<id>/resourceGroups/rg-security-platform"
-   az role assignment create --assignee "$SP_OBJECT_ID" --role "Storage Blob Data Contributor" \
-     --scope "/subscriptions/<id>/resourceGroups/rg-tfstate-security-platform/providers/Microsoft.Storage/storageAccounts/stsecplatstate001"
+   RG=/subscriptions/<sub>/resourceGroups/rg-sbom-prd
+   az group create --name rg-sbom-prd --location uksouth
+   az role assignment create --assignee-object-id "$SP" --assignee-principal-type ServicePrincipal --role Contributor --scope "$RG"
+   # Lets Terraform grant only the data-plane roles the platform uses.
+   az role assignment create --assignee-object-id "$SP" --assignee-principal-type ServicePrincipal \
+     --role "Role Based Access Control Administrator" --scope "$RG" \
+     --condition-version 2.0 --condition "((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})) OR (@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {00482a5a-887f-4fb3-b363-3b7fe8e74483, 4633458b-17de-408a-b874-0445c86b69e6, b7e6dc6d-f1e8-4753-8033-0f276bb0955b, 974c5e8b-45b9-4653-ba55-5f855dd0fb88, 0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3, 3913510d-42f4-4e42-8a64-420c390055eb}))"
+   az role assignment create --assignee-object-id "$SP" --assignee-principal-type ServicePrincipal --role "Storage Blob Data Contributor" \
+     --scope /subscriptions/<sub>/resourceGroups/rg-tfstate-security-platform/providers/Microsoft.Storage/storageAccounts/stsecplatstate001
    ```
+   The GUIDs are, in order: Key Vault Administrator, Key Vault Secrets User, Storage Blob Data Owner, Storage Queue Data Contributor, Storage Table Data Contributor and Monitoring Metrics Publisher.
 
-4. **GitHub repo secrets** (Settings → Secrets and variables → Actions):
+   Outside the resource group, the deployer also needs:
+   - **CPS workspace and its resource group:** Log Analytics Contributor (tables, saved function), Microsoft Sentinel Contributor (watchlist, analytics rule) and Workbook Contributor.
+   - **Landing zone:** permission to join the three subnets (`Microsoft.Network/virtualNetworks/subnets/join/action`) and to link and register records in the private DNS zones and the VNet. Network Contributor on the VNet plus Private DNS Zone Contributor on the zones covers this, or use the landing zone's own equivalent role.
+   - **Only with `manage_entra = true`:** Microsoft Graph `Group.ReadWrite.All` and `Application.ReadWrite.OwnedBy`.
 
-   | Secret | Value |
-   |---|---|
-   | `AZURE_CLIENT_ID` | App Registration client ID |
-   | `AZURE_TENANT_ID` | Azure AD tenant ID |
-   | `AZURE_SUBSCRIPTION_ID` | Target subscription |
-   | `ALLOWED_IP_RANGES` | JSON list, e.g. `["203.0.113.0/24","198.51.100.4/32"]` — office/VPN egress + the `cps-ubuntu-latest-private` runner's egress. Feeds `TF_VAR_allowed_ip_ranges`. |
+4. **GitHub secrets and variables** (Settings → Secrets and variables → Actions):
 
-5. **GitHub Environment** `security-platform` (Settings → Environments) — add required reviewers if you want an approval gate before `terraform apply` on push to `main`.
+   | Name | Kind | Value |
+   |---|---|---|
+   | `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` | secret | Deployer from step 2 |
+   | `TF_VARS_JSON` | secret | [`terraform.tfvars.example`](terraform.tfvars.example) as JSON: landing-zone IDs, workspace ID, GitHub App ID, alert email |
+   | `FUNCTION_APP_NAME` | variable | Output `function_app_name`, set after the first apply |
+   | `DEPENDENCY_TRACK_URL` / `DEPENDENCY_TRACK_API_KEY` | variable / secret | Only for `test-sbom-scan.yml`: the API URL and the `ci-uploader` key |
 
-6. Push this repo, open a PR to sanity-check `terraform plan` output (`workflow_dispatch` → `plan`), then merge to apply.
+5. **GitHub Environment `security-platform`.** Add required reviewers to gate `terraform apply` and the collector deploy.
 
-## First login
+6. Run `cd.yml` with `plan`, review the plan, then merge or run `apply`. Then follow Phase 1 steps 2–6 of the delivery plan: GitHub App and key, Dependency-Track bootstrap, collector proof.
 
-- **Dependency-Track**: default `admin`/`admin`, forced password change on first login — no way to pre-seed this via Terraform/env var. Do this immediately after deploy, then generate a Teams → API key for CI (that's the value for `DEPENDENCY_TRACK_API_KEY` in consuming repos).
-- **DefectDojo**: `admin` / the value in Key Vault secret `defectdojo-admin-password`. Generate an API v2 key from the user menu for CI (`DEFECTDOJO_API_KEY` in consuming repos).
+## First login to Dependency-Track
 
-## Onboarding another repo
+The default login is `admin`/`admin`, with a forced password change; nothing can pre-seed it. Sign in from the corporate network, change the password, and create a temporary API key on the Administrators team. Then run `sbom-collector/ops/dtrack_admin.py bootstrap`, which turns on portfolio access control, the vulnerability sources, the teams and keys (written straight to Key Vault) and the starter policies.
 
-See [`docs/how-to-use.md`](docs/how-to-use.md) §4 for the full step-by-step (secrets/variables, the `sbom-scan.yml` call, Terraform vs. npm, when to set `import_to_defectdojo`). Bicep repos are intentionally not onboarded — §5 of that guide covers why and what to do instead.
+Once Entra sign-in works for `sg-sbom-cps-admins`, disable the local `admin` and delete the temporary key.
 
-## Known gaps / next hardening steps
+## Known gaps
 
-- **Networking**: ingress is external HTTPS + IP allowlist, not a private VNet. Fine for MVP; move both the Container Apps Environment and PostgreSQL Flexible Server onto a shared VNet with private endpoints once this holds real production vuln data.
-- **DefectDojo image internals**: the static/media volume mount paths and entrypoint env vars in `defectdojo.tf` were written from the well-established public docker-compose reference, not verified against a running container — confirm against the pinned `defectdojo_image_tag` release's `docker-compose.yml` before first apply, they occasionally shift between releases.
-- **No HA**: single Postgres instance (`B_Standard_B1ms`), single Redis node, `min_replicas = 1` everywhere. Revisit sizing once real usage is known.
-- **Backups**: relies on Postgres Flexible Server's built-in 7-day backup retention. No tested restore procedure yet.
-- **Bicep registry-module provenance**: `image-scan.yml` covers container images referenced from a Bicep template, but nothing scans externally-published Bicep modules themselves — there's no CVE database for that. Pin-to-digest and PR review remain the control; see `docs/how-to-use.md` §5a.
-- **`image-scan.yml`'s `image_refs` is a manually-maintained list**, not auto-discovered from `.bicep` files — it can drift out of sync with what a template actually references if nobody updates it when the template changes.
+- **One replica of Dependency-Track.** A dashboard outage during patching is acceptable; the data is safe in Postgres and Blob and can be replayed.
+- **Default branch only.** The SBOM shows the default branch, not what is deployed. Phase 3's attested release SBOMs cover services that adopt them.
+- **Rate-limited collection.** GitHub's `dependency_sbom` limit bounds how fast a large estate is collected; see the delivery plan's corrections table.
+- **Corporate access to Dependency-Track** depends on the landing zone forwarding the environment's DNS domain (output `container_apps_domain`).

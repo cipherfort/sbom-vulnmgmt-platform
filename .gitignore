@@ -8,3 +8,12 @@ crash.log
 crash.*.log
 .DS_Store
 terraform.tfvars
+terraform.tfvars.json
+
+# sbom-collector (Python / Azure Functions)
+local.settings.json
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.python_packages/

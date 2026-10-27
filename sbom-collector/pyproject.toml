@@ -1,0 +1,13 @@
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "B", "I", "UP"]
+# E301/E302: the Function App reads as one module of short helpers, kept
+# compact the way the design doc wrote it.
+ignore = ["E301", "E302", "E305"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

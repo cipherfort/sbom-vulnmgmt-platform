@@ -1,0 +1,59 @@
+# Sample: a repo that builds a container image (Phase 3, F7).
+#
+# container-sbom.yml submits the image's SBOM to GitHub's dependency graph,
+# so the enterprise collector picks it up with the repo's other dependencies
+# the next night — nothing to configure on the platform side.
+# release-sbom-attest.yml is the release-time variant: it also signs the SBOM
+# as an artifact attestation tied to the image digest.
+
+name: Build image
+
+on:
+  push:
+    branches: [main]
+  release:
+    types: [published]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ghcr.io/${{ github.repository }}
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: push
+        uses: docker/build-push-action@v6
+        with:
+          push: true
+          tags: ghcr.io/${{ github.repository }}:${{ github.sha }}
+
+  sbom:
+    needs: build
+    permissions:
+      contents: write # dependency submission API
+    uses: <your-org>/<your-repo>/.github/workflows/container-sbom.yml@main
+    with:
+      image: ${{ needs.build.outputs.image }}@${{ needs.build.outputs.digest }}
+
+  attest:
+    if: github.event_name == 'release'
+    needs: build
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      packages: write
+    uses: <your-org>/<your-repo>/.github/workflows/release-sbom-attest.yml@main
+    with:
+      image_name: ${{ needs.build.outputs.image }}
+      image_digest: ${{ needs.build.outputs.digest }}
+      push_to_registry: true

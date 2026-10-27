@@ -1,0 +1,8 @@
+// Phase 3: open Dependabot alerts per org, from the latest good run per repo.
+GitHubSbomRun_CL
+| where TimeGenerated > ago(8d) and Status == "ok"
+| summarize arg_max(TimeGenerated, DependabotCritical, DependabotHigh, DependabotMedium, DependabotLow) by Org, Repo
+| summarize Critical = sum(DependabotCritical), High = sum(DependabotHigh),
+            Medium = sum(DependabotMedium), Low = sum(DependabotLow),
+            ReposWithCritical = countif(DependabotCritical > 0) by Org
+| order by Critical desc, High desc

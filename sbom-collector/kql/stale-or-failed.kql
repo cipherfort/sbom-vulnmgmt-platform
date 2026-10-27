@@ -1,0 +1,10 @@
+// Stale or failed repos (Freshness KPI): last good SBOM older than 8 days,
+// never collected, or latest attempt failed.
+GitHubSbomRun_CL
+| where TimeGenerated > ago(30d)
+| summarize LastOk = maxif(TimeGenerated, Status == "ok"),
+            arg_max(TimeGenerated, Status, Detail) by Org, Repo
+| where Status != "skipped"
+| where isnull(LastOk) or LastOk < ago(8d) or Status in ("timeout", "error")
+| project Org, Repo, LatestStatus = Status, LatestAttempt = TimeGenerated, LastOk, Detail
+| order by Org asc, Repo asc

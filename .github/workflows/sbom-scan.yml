@@ -4,65 +4,57 @@ name: Reusable SBOM Scan
 #   uses: sg-cloud-platform/cps-security-platform-infra/.github/workflows/sbom-scan.yml@main
 #   with:
 #     sbom_type: terraform            # or: npm
-#     project_name: ${{ github.event.repository.name }}
 #     project_version: pr-${{ github.event.pull_request.number }}   # or "main" on the default-branch run
 #     dependency_track_url: ${{ vars.DEPENDENCY_TRACK_URL }}
-#     defectdojo_url: ${{ vars.DEFECTDOJO_URL }}                    # omit to skip the DefectDojo import job
-#     defectdojo_product_name: ${{ vars.DEFECTDOJO_PRODUCT_NAME }}
-#     defectdojo_product_type_name: ${{ vars.DEFECTDOJO_PRODUCT_TYPE_NAME }}  # only needed until the product exists — see input description
-#     import_to_defectdojo: true                                    # typically only on the default-branch run
 #   secrets:
-#     dependency_track_api_key: ${{ secrets.DEPENDENCY_TRACK_API_KEY }}
-#     defectdojo_api_key: ${{ secrets.DEFECTDOJO_API_KEY }}
+#     dependency_track_api_key: ${{ secrets.DEPENDENCY_TRACK_API_KEY }}   # the ci-uploader team's key
 #
-# Not wired up for Bicep repos on purpose — a CycloneDX SBOM has little value
-# without a package manager behind it. Use Checkov/PSRule for those instead.
+# Why this still exists next to the enterprise collector (ADR-0002): the
+# collector reads GitHub's dependency graph, and the dependency graph has no
+# Terraform ecosystem. This workflow builds the Terraform SBOM from
+# .terraform.lock.hcl and uploads it to the same Dependency-Track.
+#
+# Project naming: "<org>/<repo>/<sbom_type>" under the org's parent project
+# "<org>". The collector owns "<org>/<repo>" for the dependency-graph SBOM;
+# a different name here stops the two uploads replacing each other's
+# components. The org parent must already exist (the collector creates it on
+# its first run for the org, or dtrack_admin.py onboard-org does).
+#
+# Runs on cps-ubuntu-latest-private because Dependency-Track is internal-only:
+# the runner needs a network path to the Container Apps environment.
 on:
   workflow_call:
     inputs:
       sbom_type:
-        description: "terraform (custom lock-file parser, not cdxgen — see comment above) | npm (cdxgen)"
-        type: string
-        required: true
-      project_name:
+        description: "terraform (custom lock-file parser) | npm (cdxgen)"
         type: string
         required: true
       project_version:
         type: string
         required: true
+      project_name:
+        description: "Override the Dependency-Track project name. Default: <org>/<repo>/<sbom_type>"
+        type: string
+        default: ""
+      parent_project:
+        description: "Override the parent project. Default: the repo's org"
+        type: string
+        default: ""
       working_directory:
         type: string
         default: "."
       dependency_track_url:
+        description: "Dependency-Track API URL, with or without https://"
         type: string
         required: true
-      defectdojo_url:
-        description: "Leave unset to skip the DefectDojo import job entirely"
-        type: string
-        default: ""
-      defectdojo_product_name:
-        type: string
-        default: ""
-      defectdojo_product_type_name:
-        description: "DefectDojo Product Type to file a brand-new product under (every DefectDojo product needs one). Only required until defectdojo_product_name's product already exists — after that, auto_create_context ignores it. Leave unset once onboarded."
-        type: string
-        default: ""
-      import_to_defectdojo:
-        description: "Export Dependency-Track findings and import into DefectDojo (only meaningful once DT has finished analyzing — set true on the default-branch run, not every PR)"
-        type: boolean
-        default: false
     secrets:
       dependency_track_api_key:
         required: true
-      defectdojo_api_key:
-        required: false
 
 jobs:
   sbom-scan:
     name: Generate & Upload SBOM
     runs-on: cps-ubuntu-latest-private
-    outputs:
-      uploaded: ${{ steps.upload.outcome == 'success' }}
 
     steps:
       - uses: actions/checkout@v4
@@ -176,120 +168,33 @@ jobs:
           path: ${{ inputs.working_directory }}/bom.json
           retention-days: 30
 
-      - name: Upload SBOM to Dependency-Track
-        id: upload
-        uses: DependencyTrack/gh-upload-sbom@v3
-        with:
-          serverhostname: ${{ inputs.dependency_track_url }}
-          apikey: ${{ secrets.dependency_track_api_key }}
-          projectname: ${{ inputs.project_name }}
-          projectversion: ${{ inputs.project_version }}
-          bomfilename: ${{ inputs.working_directory }}/bom.json
-          autocreate: true
-
-  defectdojo-import:
-    name: Import Findings to DefectDojo
-    runs-on: cps-ubuntu-latest-private
-    needs: sbom-scan
-    if: inputs.import_to_defectdojo && needs.sbom-scan.outputs.uploaded == 'true' && inputs.defectdojo_url != ''
-
-    env:
-      DT_URL: ${{ inputs.dependency_track_url }}
-      DT_API_KEY: ${{ secrets.dependency_track_api_key }}
-      DD_URL: ${{ inputs.defectdojo_url }}
-      DD_API_KEY: ${{ secrets.defectdojo_api_key }}
-      DD_PRODUCT_NAME: ${{ inputs.defectdojo_product_name }}
-      DD_PRODUCT_TYPE_NAME: ${{ inputs.defectdojo_product_type_name }}
-
-    steps:
-      - name: Normalize server URLs
-        # dependency_track_url/defectdojo_url are documented (and consumed by
-        # gh-upload-sbom's `serverhostname` input above) as bare hostnames,
-        # but every other step here builds full request URLs from them
-        # directly. Without a scheme, curl silently defaults to plain
-        # http://, which Azure Container Apps' HTTPS-only ingress won't
-        # serve — the lookup below then just returns nothing until the
-        # 600s timeout, instead of failing loudly. Normalize once here so
-        # this works whether the variable was set with or without a scheme.
-        run: |
-          set -euo pipefail
-          normalize() {
-            local url="${1%/}"
-            [[ "$url" =~ ^https?:// ]] && echo "$url" || echo "https://$url"
-          }
-          echo "DT_URL=$(normalize "$DT_URL")" >> "$GITHUB_ENV"
-          echo "DD_URL=$(normalize "$DD_URL")" >> "$GITHUB_ENV"
-
-      - name: Wait for Dependency-Track BOM processing
-        id: dtrack
-        run: |
-          set -euo pipefail
-          echo "Waiting for Dependency-Track to finish processing the SBOM..."
-          timeout=600
-          interval=15
-          elapsed=0
-          project_uuid=""
-          while [ $elapsed -lt $timeout ]; do
-            project_uuid=$(curl -sf -H "X-Api-Key: $DT_API_KEY" \
-              "$DT_URL/api/v1/project/lookup?name=${{ inputs.project_name }}&version=${{ inputs.project_version }}" \
-              | jq -r '.uuid // empty')
-            if [ -n "$project_uuid" ]; then
-              component_count=$(curl -sf -H "X-Api-Key: $DT_API_KEY" \
-                "$DT_URL/api/v1/component/project/$project_uuid?limit=1" \
-                -D - -o /dev/null | grep -i '^x-total-count:' | tr -dc '0-9' || echo 0)
-              [ "${component_count:-0}" -gt 0 ] && break
-            fi
-            sleep $interval
-            elapsed=$((elapsed + interval))
-          done
-          if [ -z "$project_uuid" ]; then
-            echo "::error::Dependency-Track project not found after ${timeout}s"
-            exit 1
-          fi
-          echo "project_uuid=$project_uuid" >> "$GITHUB_OUTPUT"
-
-      - name: Export findings and import into DefectDojo
+      - name: Resolve Dependency-Track target
+        id: target
         env:
-          PROJECT_UUID: ${{ steps.dtrack.outputs.project_uuid }}
+          DT_URL: ${{ inputs.dependency_track_url }}
+          PROJECT_NAME: ${{ inputs.project_name }}
+          PARENT: ${{ inputs.parent_project }}
+          SBOM_TYPE: ${{ inputs.sbom_type }}
+        # gh-upload-sbom v4 takes a bare hostname; DEPENDENCY_TRACK_URL is
+        # usually set as a full https:// URL, so strip the scheme and any
+        # trailing slash here instead of making every caller get it right.
         run: |
           set -euo pipefail
+          host="${DT_URL#https://}"; host="${host#http://}"; host="${host%/}"
+          {
+            echo "host=$host"
+            echo "project=${PROJECT_NAME:-$GITHUB_REPOSITORY/$SBOM_TYPE}"
+            echo "parent=${PARENT:-$GITHUB_REPOSITORY_OWNER}"
+          } >> "$GITHUB_OUTPUT"
 
-          export_status=$(curl -s -o findings.json -w '%{http_code}' \
-            -H "X-Api-Key: $DT_API_KEY" \
-            "$DT_URL/api/v1/finding/project/$PROJECT_UUID/export")
-          if [ "$export_status" -ge 400 ]; then
-            echo "::error::Dependency-Track finding export failed (HTTP $export_status)"
-            cat findings.json
-            exit 1
-          fi
-
-          # auto_create_context: DefectDojo returns 400 on import if the
-          # product/engagement named below don't already exist, unless this
-          # is set — required for a product's first-ever import (like this
-          # self-test), harmless once it exists on later runs. A brand-new
-          # product also needs a Product Type (DD_PRODUCT_TYPE_NAME) to file
-          # under; once the product exists, DefectDojo ignores it, so it's
-          # only needed for onboarding.
-          import_args=(
-            -F "scan_type=Dependency Track Finding Packaging Format (FPF) Export"
-            -F "file=@findings.json"
-            -F "product_name=$DD_PRODUCT_NAME"
-            -F "engagement_name=cd-${{ github.sha }}"
-            -F "auto_create_context=true"
-            -F "active=true"
-            -F "verified=true"
-            -F "close_old_findings=true"
-          )
-          if [ -n "$DD_PRODUCT_TYPE_NAME" ]; then
-            import_args+=(-F "product_type_name=$DD_PRODUCT_TYPE_NAME")
-          fi
-
-          import_status=$(curl -s -o import-response.json -w '%{http_code}' -X POST "$DD_URL/api/v2/import-scan/" \
-            -H "Authorization: Token $DD_API_KEY" \
-            "${import_args[@]}")
-          if [ "$import_status" -ge 400 ]; then
-            echo "::error::DefectDojo import failed (HTTP $import_status)"
-            cat import-response.json
-            exit 1
-          fi
-          echo "DefectDojo import succeeded (HTTP $import_status)"
+      - name: Upload SBOM to Dependency-Track
+        # Pinned by commit SHA, as with trivy-action in image-scan.yml.
+        uses: DependencyTrack/gh-upload-sbom@331f980a6eba119842052f447c54b09e4888b4c6 # v4.3.0
+        with:
+          server-hostname: ${{ steps.target.outputs.host }}
+          api-key: ${{ secrets.dependency_track_api_key }}
+          project-name: ${{ steps.target.outputs.project }}
+          project-version: ${{ inputs.project_version }}
+          parent-name: ${{ steps.target.outputs.parent }}
+          bom-filename: ${{ inputs.working_directory }}/bom.json
+          auto-create: true

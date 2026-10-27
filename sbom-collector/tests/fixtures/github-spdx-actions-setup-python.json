@@ -1,0 +1,133 @@
+{
+  "spdxVersion": "SPDX-2.3",
+  "dataLicense": "CC0-1.0",
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "name": "com.github.actions/setup-python",
+  "documentNamespace": "https://spdx.org/spdxdocs/protobom/eaa181d7-3903-4eea-99a0-420ab74600b4",
+  "comment": "Exact versions could not be resolved for some packages. For more information: https://docs.github.com/en/code-security/supply-chain-security/understanding-your-software-supply-chain/about-the-dependency-graph#dependencies-included.",
+  "creationInfo": {
+    "creators": [
+      "Tool: protobom-v0.0.0-20261026134324-e1f19f723ff6+dirty",
+      "Tool: GitHub.com-Dependency-Graph",
+      "Tool: dependabot"
+    ],
+    "created": "2026-10-27T11:22:04Z"
+  },
+  "packages": [
+    {
+      "name": "com.github.actions/setup-python",
+      "SPDXID": "SPDXRef-github-actions-setup-python-main-f1f1c6",
+      "versionInfo": "main",
+      "downloadLocation": "git+https://github.com/actions/setup-python",
+      "filesAnalyzed": false,
+      "licenseDeclared": "MIT",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:github/actions/setup-python@main"
+        }
+      ]
+    },
+    {
+      "name": "packaging",
+      "SPDXID": "SPDXRef-pypi-packaging-20.7-e3bb6d",
+      "versionInfo": "20.7",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0 AND BSD-2-Clause",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/packaging@20.7"
+        }
+      ]
+    },
+    {
+      "name": "certifi",
+      "SPDXID": "SPDXRef-pypi-certifi-2024.7.4-6b38fb",
+      "versionInfo": "2024.7.4",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MPL-2.0",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/certifi@2024.7.4"
+        }
+      ]
+    },
+    {
+      "name": "@azure/core-rest-pipeline",
+      "SPDXID": "SPDXRef-npm-azure-core-rest-pipeline-1.23.0-c85c01",
+      "versionInfo": "1.23.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/%40azure/core-rest-pipeline@1.23.0"
+        }
+      ]
+    },
+    {
+      "name": "actions/checkout",
+      "SPDXID": "SPDXRef-githubactions-actions-checkout-6..-b6d641",
+      "versionInfo": "6.*.*",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:githubactions/actions/checkout@6.%2A.%2A"
+        }
+      ]
+    },
+    {
+      "name": "kivy-deps-gstreamer",
+      "SPDXID": "SPDXRef-pypi-kivy-deps-gstreamer-0.1.17-5ce717",
+      "versionInfo": "0.1.17",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/kivy-deps-gstreamer@0.1.17"
+        }
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "spdxElementId": "SPDXRef-github-actions-setup-python-main-f1f1c6",
+      "relatedSpdxElement": "SPDXRef-pypi-packaging-20.7-e3bb6d",
+      "relationshipType": "DEPENDS_ON"
+    },
+    {
+      "spdxElementId": "SPDXRef-github-actions-setup-python-main-f1f1c6",
+      "relatedSpdxElement": "SPDXRef-pypi-certifi-2024.7.4-6b38fb",
+      "relationshipType": "DEPENDS_ON"
+    },
+    {
+      "spdxElementId": "SPDXRef-github-actions-setup-python-main-f1f1c6",
+      "relatedSpdxElement": "SPDXRef-pypi-kivy-deps-gstreamer-0.1.17-5ce717",
+      "relationshipType": "DEPENDS_ON"
+    },
+    {
+      "spdxElementId": "SPDXRef-github-actions-setup-python-main-f1f1c6",
+      "relatedSpdxElement": "SPDXRef-githubactions-actions-checkout-6..-b6d641",
+      "relationshipType": "DEPENDS_ON"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relatedSpdxElement": "SPDXRef-github-actions-setup-python-main-f1f1c6",
+      "relationshipType": "DESCRIBES"
+    }
+  ]
+}

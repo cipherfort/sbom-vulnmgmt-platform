@@ -1,0 +1,12 @@
+// SbomLatest: the most recent snapshot per repo. Save as a workspace
+// function (sentinel.tf does this); the other queries build on it.
+// Unchanged repos only get a new snapshot on the Sunday full refresh, so
+// look back 8 days.
+let snap = GitHubSbom_CL
+    | where TimeGenerated > ago(8d)
+    | summarize Snap = max(TimeGenerated) by Org, Repo;
+GitHubSbom_CL
+| where TimeGenerated > ago(8d)
+| join kind=inner snap on Org, Repo
+| where TimeGenerated == Snap
+| project-away Snap, Org1, Repo1

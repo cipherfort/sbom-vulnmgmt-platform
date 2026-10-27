@@ -1,0 +1,11 @@
+// Coverage by org (F5, Coverage KPI). "error" is written when a message
+// fails its last retry and is about to go to the poison queue.
+GitHubSbomRun_CL
+| where TimeGenerated > ago(8d)
+| summarize arg_max(TimeGenerated, Status, ComponentCount) by Org, Repo
+| summarize Active = countif(Status != "skipped"),
+            WithSbom = countif(Status == "ok" and ComponentCount > 0),
+            NoDependencyGraph = countif(Status == "no-dependency-graph"),
+            Failed = countif(Status in ("timeout", "error")) by Org
+| extend CoveragePct = round(100.0 * WithSbom / Active, 1)
+| order by CoveragePct asc

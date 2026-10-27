@@ -1,0 +1,45 @@
+name: SBOM Collector CI
+
+on:
+  pull_request:
+    paths:
+      - "sbom-collector/**"
+      - "*.tf"
+      - "tests/*.tftest.hcl"
+      - ".github/workflows/sbom-collector-ci.yml"
+  push:
+    branches: [main]
+    paths:
+      - "sbom-collector/**"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Lint and test collector
+    runs-on: cps-ubuntu-latest-private
+    defaults:
+      run:
+        working-directory: sbom-collector
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11" # same as the Function App runtime
+      - run: pip install -r requirements-dev.txt
+      - run: ruff check .
+      - run: python -m pytest -q
+
+  terraform:
+    name: Terraform fmt, validate and mocked plan
+    runs-on: cps-ubuntu-latest-private
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.11.4" # mock_resource override_during needs 1.11+
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend=false -input=false
+      - run: terraform validate
+      - run: terraform test

@@ -1,0 +1,5 @@
+// Incident: where do we run package X? (F4) Replace log4j-core.
+SbomLatest
+| where PackageName has "log4j-core" or Purl has "log4j-core"
+| project Org, Repo, Branch, PackageName, PackageVersion, Purl
+| order by Org asc, Repo asc
