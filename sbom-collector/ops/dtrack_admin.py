@@ -75,6 +75,13 @@ def ensure_oidc_mapping(dt, group_name, team_uuid):
 
 def store_key(team_name, key, key_vault_url):
     secret = KEY_SECRETS[team_name]
+    local = os.environ.get("LOCAL_SECRETS_DIR")
+    if local:  # local runs (poc/): one file per secret, as the collector reads them
+        path = pathlib.Path(local, secret)
+        path.touch(mode=0o600)
+        path.write_text(key)
+        print(f"Stored {team_name} API key in {path}")
+        return
     if not key_vault_url:
         print(f"{team_name} API key (store as Key Vault secret {secret}; shown once): {key}", file=sys.stderr)
         return
@@ -85,17 +92,21 @@ def store_key(team_name, key, key_vault_url):
 
 
 def ensure_policy(dt, spec, existing, restricted_group_uuid):
-    if spec["name"] in existing:
+    policy = existing.get(spec["name"])
+    if policy:
         print(f"Policy exists: {spec['name']}")
-        return
-    policy = dt.call("PUT", "policy", json={"name": spec["name"], "operator": "ANY",
-                                            "violationState": spec["violationState"]}).json()
-    for cond in spec["conditions"]:
-        value = restricted_group_uuid if cond["value"] == "@restricted-group" else cond["value"]
-        dt.call("PUT", f"policy/{policy['uuid']}/condition", json={**cond, "value": value})
+    else:
+        policy = dt.call("PUT", "policy", json={"name": spec["name"], "operator": "ANY",
+                                                "violationState": spec["violationState"]}).json()
+        for cond in spec["conditions"]:
+            value = restricted_group_uuid if cond["value"] == "@restricted-group" else cond["value"]
+            dt.call("PUT", f"policy/{policy['uuid']}/condition", json={**cond, "value": value})
+        print(f"Created policy: {spec['name']}")
+    # Both calls are idempotent. policy/{uuid}/tag/{name} 404s unless the tag
+    # already exists, so create the tag first and use the 4.12+ tag endpoint.
     for tag in spec.get("tags", []):
-        dt.call("POST", f"policy/{policy['uuid']}/tag/{tag}", ok=(304,))
-    print(f"Created policy: {spec['name']}")
+        dt.call("PUT", "tag", json=[tag])
+        dt.call("POST", f"tag/{tag}/policy", json=[policy["uuid"]])
 
 
 def bootstrap(dt, args):
@@ -130,7 +141,7 @@ def bootstrap(dt, args):
             print(f"Licence {spdx_id} not in this Dependency-Track's licence list; skipped", file=sys.stderr)
             continue
         dt.call("POST", f"licenseGroup/{group['uuid']}/license/{lic.json()['uuid']}", ok=(304,))
-    existing = {p["name"] for p in dt.call("GET", "policy").json()}
+    existing = {p["name"]: p for p in dt.call("GET", "policy").json()}
     for spec in POLICIES:
         ensure_policy(dt, spec, existing, group["uuid"])
 

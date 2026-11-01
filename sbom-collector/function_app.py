@@ -5,6 +5,7 @@ import datetime as dt
 import json
 import logging
 import os
+import pathlib
 import time
 from functools import cache, lru_cache
 
@@ -35,24 +36,36 @@ APPS = {  # app name -> (app id, Key Vault secret holding its private key)
 _tokens: dict = {}
 
 # ---------- Azure clients (managed identity everywhere) ----------
+# Local runs (poc/) set LOCAL_SECRETS_DIR and a SbomStorage connection string
+# for Azurite. Azure never sets either: there SbomStorage is identity-based
+# (SbomStorage__queueServiceUri and friends).
 @lru_cache
 def _secret(name):
+    local = os.environ.get("LOCAL_SECRETS_DIR")
+    if local:  # one file per secret, named as in Key Vault
+        path = pathlib.Path(local, name)
+        if not path.is_file():
+            raise ResourceNotFoundError(f"{path} not found")
+        return path.read_text().strip()
     return SecretClient(os.environ["KEY_VAULT_URL"], CRED).get_secret(name).value
+
+def _storage(cls, service, **kw):
+    conn = os.environ.get("SbomStorage")
+    if conn:
+        return cls.from_connection_string(conn, **kw)
+    return cls(f"https://{ACCOUNT}.{service}.core.windows.net", credential=CRED, **kw)
 
 @lru_cache
 def _queue(name="sbom-work"):
-    return QueueClient(f"https://{ACCOUNT}.queue.core.windows.net", name, credential=CRED,
-                       message_encode_policy=TextBase64EncodePolicy())
+    return _storage(QueueClient, "queue", queue_name=name, message_encode_policy=TextBase64EncodePolicy())
 
 @lru_cache
 def _state():
-    return TableServiceClient(f"https://{ACCOUNT}.table.core.windows.net",
-                              credential=CRED).get_table_client("repostate")
+    return _storage(TableServiceClient, "table").get_table_client("repostate")
 
 @lru_cache
 def _blobs():
-    return BlobServiceClient(f"https://{ACCOUNT}.blob.core.windows.net",
-                             credential=CRED).get_container_client("sbom-raw")
+    return _storage(BlobServiceClient, "blob").get_container_client("sbom-raw")
 
 @lru_cache
 def _logs():

@@ -219,3 +219,25 @@ def test_poison_depth_logged_for_alert(monkeypatch, caplog):
     with caplog.at_level("INFO"):
         fa.report_poison_depth(None)
     assert "sbom-poison-depth=3" in caplog.text
+
+
+def test_local_secrets_dir_replaces_key_vault(tmp_path, monkeypatch):
+    (tmp_path / "dtrack-api-key").write_text("odt_local\n")
+    monkeypatch.setenv("LOCAL_SECRETS_DIR", str(tmp_path))
+    fa._secret.cache_clear()
+    try:
+        assert fa._secret("dtrack-api-key") == "odt_local"
+        with pytest.raises(ResourceNotFoundError):  # sync_dtrack_acl relies on this to skip
+            fa._secret("dtrack-acl-key")
+    finally:
+        fa._secret.cache_clear()
+
+
+def test_storage_uses_connection_string_when_set(monkeypatch):
+    cls = mock.Mock()
+    monkeypatch.setenv("SbomStorage", "UseDevelopmentStorage=true")
+    fa._storage(cls, "queue", queue_name="q")
+    cls.from_connection_string.assert_called_once_with("UseDevelopmentStorage=true", queue_name="q")
+    monkeypatch.delenv("SbomStorage")
+    fa._storage(cls, "queue", queue_name="q")
+    cls.assert_called_once_with("https://stsbomtest.queue.core.windows.net", credential=fa.CRED, queue_name="q")

@@ -52,6 +52,7 @@ Every Azure hop uses a managed identity. The only long-lived secrets are the Git
 | `tests/plan.tftest.hcl` | Full plan against mocked providers (`terraform test`) |
 | `sbom-collector/` | The Function App: `function_app.py`, `convert.py` (SPDX → CycloneDX), `dtrack.py`, tests, KQL |
 | `sbom-collector/ops/dtrack_admin.py` | Dependency-Track bootstrap, org onboarding, ACL sync |
+| `poc/` | Local proof of concept: the collector against real GitHub, with Dependency-Track and Azurite in Docker ([poc/README.md](poc/README.md)) |
 | `scripts/github/security-config.sh` | Creates and applies the `cps-sbom-baseline` enterprise security configuration |
 | `.github/workflows/` | `cd.yml` (Terraform + collector deploy), `sbom-collector-ci.yml`, and the reusable `sbom-scan.yml`, `image-scan.yml`, `container-sbom.yml`, `release-sbom-attest.yml` |
 

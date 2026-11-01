@@ -3,14 +3,15 @@
   "Values": {
     "FUNCTIONS_WORKER_RUNTIME": "python",
     "AzureWebJobsStorage": "UseDevelopmentStorage=true",
-    "SbomStorage": "UseDevelopmentStorage=true",
+    "SbomStorage": "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;QueueEndpoint=http://127.0.0.1:10001/devstoreaccount1;TableEndpoint=http://127.0.0.1:10002/devstoreaccount1;",
     "SBOM_STORAGE_ACCOUNT": "devstoreaccount1",
-    "GITHUB_APP_ID": "123456",
+    "LOCAL_SECRETS_DIR": "../poc/secrets",
+    "GITHUB_APP_ID": "<collector app id>",
     "GITHUB_INSTALLER_APP_ID": "",
     "GITHUB_INSTALLER_INSTALLATION_ID": "",
     "GITHUB_ENTERPRISE": "<enterprise-slug>",
-    "KEY_VAULT_URL": "https://kv-sbom-prd.vault.azure.net/",
-    "DTRACK_URL": "https://ca-dtrack-api.<env-domain>",
+    "KEY_VAULT_URL": "",
+    "DTRACK_URL": "http://localhost:8081",
     "DCE_ENDPOINT": "",
     "DCR_IMMUTABLE_ID": ""
   }

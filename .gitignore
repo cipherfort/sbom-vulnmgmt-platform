@@ -17,3 +17,7 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .python_packages/
+
+# Local proof of concept (poc/)
+poc/secrets/
+poc/out/

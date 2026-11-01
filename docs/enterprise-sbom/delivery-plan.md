@@ -47,6 +47,21 @@ These changed the build. Each one is explained in ADR-0002.
 - [ ] **[manual]** Bootstrap Azure: state storage, the deployer's federated credential and roles, `rg-sbom-prd`, and the `TF_VARS_JSON` secret (README, Bootstrap).
 - [ ] **[check]** Gate: design agreed.
 
+## Local proof of concept (from 1 Nov 2026, alongside Phase 0)
+
+No Azure needed. Instructions: [poc/README.md](../../poc/README.md).
+
+- [x] **[code]** `poc/`: Dependency-Track 4.14.6 and Azurite in Docker, plus `poc.py`, which runs the real collector code. The collector reads secrets from files (`LOCAL_SECRETS_DIR`) and storage from a connection string (`SbomStorage`) when these are set; Azure sets neither.
+- [x] **[check]** 1 Nov 2026, with a user token standing in for the App:
+  - Two repos collected end to end: `generate-report`, then poll, then download, then Dependency-Track, plus Sentinel rows.
+  - Children land under their org parent.
+  - The uploader's team is put on the ACL of the projects it creates.
+  - After `onboard-org` and the ACL sync, an org team's key sees only its own org.
+- [x] **[check]** Found and fixed a bug: `bootstrap` failed on 4.14.6 when tagging a policy, because the tag has to exist first.
+- [ ] **[manual]** Create an org-owned test App, install it on a few repos, and run `poc.py dt-init`, then `ratelimit`, then `collect`.
+- [ ] **[check]** Record the App installation's `dependency_sbom` limit under Open questions.
+- [ ] **[check]** For three repos, compare the component counts with GitHub's Insights → Dependency graph.
+
 ## Phase 1 — Pilot on the CPS org (9 – 20 Nov 2026)
 
 ### Step 1 — GitHub enterprise policy (pilot scope)
