@@ -58,8 +58,13 @@ No Azure needed. Instructions: [poc/README.md](../../poc/README.md).
   - The uploader's team is put on the ACL of the projects it creates.
   - After `onboard-org` and the ACL sync, an org team's key sees only its own org.
 - [x] **[check]** Found and fixed a bug: `bootstrap` failed on 4.14.6 when tagging a policy, because the tag has to exist first.
-- [ ] **[manual]** Create an org-owned test App, install it on a few repos, and run `poc.py dt-init`, then `ratelimit`, then `collect`.
-- [ ] **[check]** Record the App installation's `dependency_sbom` limit under Open questions.
+- [x] **[manual]** Test App `cps-sbom-collector-poc` (org-owned) installed on `cipherfort`, all 9 repos. `poc.py enumerate` run on 1 Nov 2026:
+  - 3 repos `ok` (424 to 2,969 components), with Dependabot counts.
+  - 1 repo skipped as unchanged (change detection works).
+  - 5 repos `no-dependency-graph`. Four of them are private repos with the dependency graph off. One is `ai-recruitment-os`, which has 34 manifests: exactly the gap `cps-sbom-baseline` closes. The fifth is a public repo whose one manifest gave no graph.
+- [x] **[check]** The App installation's `dependency_sbom` limit is **100/hour** (`cipherfort`, not an Enterprise Cloud org; `core` was 5,000). See Open questions.
+- [ ] **[check]** Repeat `poc.py ratelimit` on a GHEC org installation, in case the enterprise limit is higher.
+- [ ] **[check]** Dependency-Track shows more findings than Dependabot: `aisec` has 94 vulnerabilities (6 critical), against 2 open Dependabot alerts. It also has fewer components than the SBOM (2,123 against 2,969). Explain both before showing teams the dashboard.
 - [ ] **[check]** For three repos, compare the component counts with GitHub's Insights → Dependency graph.
 
 ## Phase 1 — Pilot on the CPS org (9 – 20 Nov 2026)
@@ -157,7 +162,7 @@ No Azure needed. Instructions: [poc/README.md](../../poc/README.md).
 - [ ] Does Dependency-Track need a formal open-source approval or a DPIA screening?
 - [ ] Are any orgs out of scope (sandboxes, archived programmes)?
 - [ ] Who in each team is the named owner for findings?
-- [ ] **New:** what `dependency_sbom` limit does an App installation get? If it is 100/hour per installation, a large org needs the rolling refresh, and the first collection takes several nights.
+- [x] **New:** what `dependency_sbom` limit does an App installation get? **100/hour per installation**, measured 1 Nov 2026 on a non-GHEC org (to be re-checked on a GHEC org). That is about 2,400 repos a day for each org, with orgs collected in parallel. An org of up to about 1,000 active repos gets its first full collection in one night. The rolling refresh stays, to spread the weekly forced re-collection.
 - [ ] **New:** do Teams channels still accept Dependency-Track's MessageCard webhooks (Office 365 connectors are being retired)? If not, point the notification at a Power Automate workflow URL.
 - [ ] **New:** what do we export from DefectDojo before decommissioning, if anything?
 
