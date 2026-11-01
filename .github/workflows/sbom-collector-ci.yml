@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - "sbom-collector/**"
+      - "poc/**"
       - "*.tf"
       - "tests/*.tftest.hcl"
       - ".github/workflows/sbom-collector-ci.yml"
@@ -28,7 +29,7 @@ jobs:
         with:
           python-version: "3.11" # same as the Function App runtime
       - run: pip install -r requirements-dev.txt
-      - run: ruff check .
+      - run: ruff check . ../poc
       - run: python -m pytest -q
 
   terraform:

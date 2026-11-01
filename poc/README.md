@@ -12,7 +12,7 @@ What it proves, before any Azure work:
 
 ## Prerequisites
 
-- Docker with at least **6 GB** of memory. Dependency-Track alone takes 4–5 GB.
+- Docker with at least **6 GB** of memory and **15 GB of free disk** in Docker Desktop. Dependency-Track takes 4–5 GB of memory, and its vulnerability databases reached about 10 GB of disk on the first day. A full Docker disk stops its database, and every login then fails with a 500 error.
 - The collector's Python environment:
   ```bash
   cd sbom-collector && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt -r requirements-dev.txt

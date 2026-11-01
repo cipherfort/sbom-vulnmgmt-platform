@@ -156,9 +156,9 @@ gh attestation verify oci://<image>@<digest> --owner <org> --predicate-type http
 
 - **Run enumeration now:** Portal → `func-sbom-<env>` → `enumerate_repos` → Test/Run, or `az rest` against the admin endpoint.
 - **Force a repo:** delete its row from the `repostate` table; the next enumeration queues it.
-- **Rate limits:** `generate-report` has its own GitHub limit (`dependency_sbom`). Throttled jobs are parked on the queue until the limit resets, so a large backlog drains over hours, and the first collection of a big org can take several nights. That is expected, not a failure.
+- **Rate limits:** `generate-report` has its own GitHub limit (`dependency_sbom`). Throttled jobs are parked on the queue until the limit resets, so a large backlog drains over hours. The limit is 100 an hour per org, about 2,400 repos a night, so only an org larger than that needs more than one night for its first collection. That is expected, not a failure.
 - **Logs:** Application Insights `appi-sbom-<env>`, and `FunctionAppLogs` in the CPS workspace.
-- **Local run:** copy `sbom-collector/local.settings.json.example` to `local.settings.json`, start Azurite, then `func start`.
+- **Local run:** [`poc/README.md`](../poc/README.md) runs the collector against real GitHub, with Dependency-Track and Azurite in Docker and no Azure needed.
 - **Tests:** `cd sbom-collector && .venv/bin/python -m pytest -q`. For Terraform: `terraform init -backend=false && terraform test`.
 
 ## 9. Rotating credentials

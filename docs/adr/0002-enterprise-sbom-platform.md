@@ -31,7 +31,7 @@ The full design, with requirements F1–F7 and N1–N5, is *Enterprise SBOM Plat
 
 The delivery plan lists each departure with its evidence. In short:
 
-- **Rate limits.** `generate-report` has its own `dependency_sbom` bucket (100/hour observed on a user token). The design doc assumed the general 15,000/hour.
+- **Rate limits.** `generate-report` has its own `dependency_sbom` bucket (100/hour per App installation, so per org, measured 1 Nov 2026). The design doc assumed the general 15,000/hour.
   - The weekly Sunday full refresh becomes a rolling refresh: each repo gets a stable weekday.
   - Throttled jobs are parked until the limit resets.
   - The Function is capped at 4 instances per function (at most about 48 concurrent GitHub calls).
@@ -65,7 +65,7 @@ The delivery plan lists each departure with its evidence. In short:
 **Negative / accepted risk**
 - **Default branch only.** The SBOM shows what is on the default branch, not what is deployed. This is stated on the workbook; Phase 3's release-time attested SBOMs close the gap for services that adopt them.
 - **The dependency graph misses things:** no lockfile, unsupported ecosystems, and containers (until `container-sbom.yml` is adopted). The coverage panel shows `no-dependency-graph`.
-- **Collection is bounded by GitHub's SBOM rate limit.** The first collection of a large org can take several nights.
+- **Collection is bounded by GitHub's SBOM rate limit.** That is about 2,400 repos a night per org, with orgs collected in parallel; only an org larger than that needs more than one night for its first collection.
 - **Dependency-Track runs as one replica.** A dashboard outage during patching is acceptable; the data is safe in Postgres and Blob and can be replayed.
 - **CPS admins get ACCESS_MANAGEMENT** in Dependency-Track, because that permission is the 4.x bypass for portfolio access control. That is more than "view everything".
 - **Removing DefectDojo drops its ticketing and SLA tracking.** Triage state now lives in Dependency-Track's analysis states.
