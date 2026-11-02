@@ -10,6 +10,7 @@ One Azure-hosted collector pulls GitHub's dependency-graph SBOM for every reposi
 | Read | For |
 |---|---|
 | [ADR-0002](docs/adr/0002-enterprise-sbom-platform.md) | The decision, and where the build departs from the design doc |
+| [Deployment runbook](docs/enterprise-sbom/deployment-runbook.md) | Every step from a fresh copy of this repo to enterprise-wide collection, with commands |
 | [Delivery plan](docs/enterprise-sbom/delivery-plan.md) | Phase 0–3 checklists, corrections to the design doc, open questions |
 | [How to use](docs/how-to-use.md) | Operating model, onboarding an org, Terraform CI path, failure runbook |
 
@@ -56,67 +57,21 @@ Every Azure hop uses a managed identity. The only long-lived secrets are the Git
 | `scripts/github/security-config.sh` | Creates and applies the `cps-sbom-baseline` enterprise security configuration |
 | `.github/workflows/` | `cd.yml` (Terraform + collector deploy), `sbom-collector-ci.yml`, and the reusable `sbom-scan.yml`, `image-scan.yml`, `container-sbom.yml`, `release-sbom-attest.yml` |
 
-## Bootstrap (manual, one-time)
+## Deploying it
 
-1. **Terraform state storage.** Reuses the existing account; the state key is `sbom-platform.tfstate`:
-   ```bash
-   az group create --name rg-tfstate-security-platform --location uksouth
-   az storage account create --name stsecplatstate001 --resource-group rg-tfstate-security-platform \
-     --location uksouth --sku Standard_LRS --kind StorageV2 --allow-blob-public-access false --https-only true
-   az storage container create --name terraform-state --account-name stsecplatstate001 --auth-mode login
-   ```
+Follow the [deployment runbook](docs/enterprise-sbom/deployment-runbook.md), step by step:
+- what to change when you copy this repo to another org;
+- the Azure and GitHub bootstrap (state storage, deployer identity and roles, secrets);
+- the first apply and the Dependency-Track setup;
+- the pilot collection;
+- Entra sign-in;
+- the enterprise rollout.
 
-2. **Deployer identity with an OIDC federated credential for `main`:**
-   ```bash
-   az ad app create --display-name "sp-sbom-platform-github-actions"
-   APP_ID=$(az ad app list --display-name "sp-sbom-platform-github-actions" --query '[0].appId' -o tsv)
-   az ad sp create --id "$APP_ID"
-   az ad app federated-credential create --id "$APP_ID" --parameters '{
-     "name": "sbom-cd-main",
-     "issuer": "https://token.actions.githubusercontent.com",
-     "subject": "repo:sg-cloud-platform/cps-security-platform-infra:ref:refs/heads/main",
-     "audiences": ["api://AzureADTokenExchange"]
-   }'
-   SP=$(az ad sp show --id "$APP_ID" --query id -o tsv)
-   ```
+Every step has its commands and a check.
 
-3. **Resource group and roles.** Terraform creates role assignments, so Contributor alone is not enough:
-   ```bash
-   RG=/subscriptions/<sub>/resourceGroups/rg-sbom-prd
-   az group create --name rg-sbom-prd --location uksouth
-   az role assignment create --assignee-object-id "$SP" --assignee-principal-type ServicePrincipal --role Contributor --scope "$RG"
-   # Lets Terraform grant only the data-plane roles the platform uses.
-   az role assignment create --assignee-object-id "$SP" --assignee-principal-type ServicePrincipal \
-     --role "Role Based Access Control Administrator" --scope "$RG" \
-     --condition-version 2.0 --condition "((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})) OR (@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {00482a5a-887f-4fb3-b363-3b7fe8e74483, 4633458b-17de-408a-b874-0445c86b69e6, b7e6dc6d-f1e8-4753-8033-0f276bb0955b, 974c5e8b-45b9-4653-ba55-5f855dd0fb88, 0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3, 3913510d-42f4-4e42-8a64-420c390055eb}))"
-   az role assignment create --assignee-object-id "$SP" --assignee-principal-type ServicePrincipal --role "Storage Blob Data Contributor" \
-     --scope /subscriptions/<sub>/resourceGroups/rg-tfstate-security-platform/providers/Microsoft.Storage/storageAccounts/stsecplatstate001
-   ```
-   The GUIDs are, in order: Key Vault Administrator, Key Vault Secrets User, Storage Blob Data Owner, Storage Queue Data Contributor, Storage Table Data Contributor and Monitoring Metrics Publisher.
-
-   Outside the resource group, the deployer also needs:
-   - **CPS workspace and its resource group:** Log Analytics Contributor (tables, saved function), Microsoft Sentinel Contributor (watchlist, analytics rule) and Workbook Contributor.
-   - **Landing zone:** permission to join the three subnets (`Microsoft.Network/virtualNetworks/subnets/join/action`) and to link and register records in the private DNS zones and the VNet. Network Contributor on the VNet plus Private DNS Zone Contributor on the zones covers this, or use the landing zone's own equivalent role.
-   - **Only with `manage_entra = true`:** Microsoft Graph `Group.ReadWrite.All` and `Application.ReadWrite.OwnedBy`.
-
-4. **GitHub secrets and variables** (Settings → Secrets and variables → Actions):
-
-   | Name | Kind | Value |
-   |---|---|---|
-   | `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` | secret | Deployer from step 2 |
-   | `TF_VARS_JSON` | secret | [`terraform.tfvars.example`](terraform.tfvars.example) as JSON: landing-zone IDs, workspace ID, GitHub App ID, alert email |
-   | `FUNCTION_APP_NAME` | variable | Output `function_app_name`, set after the first apply |
-   | `DEPENDENCY_TRACK_URL` / `DEPENDENCY_TRACK_API_KEY` | variable / secret | Only for `test-sbom-scan.yml`: the API URL and the `ci-uploader` key |
-
-5. **GitHub Environment `security-platform`.** Add required reviewers to gate `terraform apply` and the collector deploy.
-
-6. Run `cd.yml` with `plan`, review the plan, then merge or run `apply`. Then follow Phase 1 steps 2–6 of the delivery plan: GitHub App and key, Dependency-Track bootstrap, collector proof.
-
-## First login to Dependency-Track
-
-The default login is `admin`/`admin`, with a forced password change; nothing can pre-seed it. Sign in from the corporate network, change the password, and create a temporary API key on the Administrators team. Then run `sbom-collector/ops/dtrack_admin.py bootstrap`, which turns on portfolio access control, the vulnerability sources, the teams and keys (written straight to Key Vault) and the starter policies.
-
-Once Entra sign-in works for `sg-sbom-cps-admins`, disable the local `admin` and delete the temporary key.
+Two things catch people out:
+- **The deployer's federated credential subject is `repo:<org>/<repo>:environment:security-platform`, not a branch ref.** Both `cd.yml` jobs run in that environment, and GitHub then puts the environment in the token subject.
+- **The deployer needs more than Contributor.** It also needs Role Based Access Control Administrator, conditioned, on `rg-sbom-<env>`, plus roles on the CPS workspace's resource group, the landing-zone VNet and the DNS zones. See runbook step 6.
 
 ## Known gaps
 

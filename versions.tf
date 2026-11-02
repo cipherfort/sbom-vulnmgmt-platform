@@ -30,7 +30,7 @@ terraform {
   }
 
   # Storage account referenced here must exist before `terraform init` —
-  # see README "Bootstrap" step 1. New state key: this is a rebuild, not an
+  # see docs/enterprise-sbom/deployment-runbook.md, step 4. New state key: this is a rebuild, not an
   # in-place change of the old rg-security-platform stack, so the first
   # apply can't destroy that stack by accident. Decommissioning it is an
   # explicit checklist step in docs/enterprise-sbom/delivery-plan.md.

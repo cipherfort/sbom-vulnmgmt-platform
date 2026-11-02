@@ -101,7 +101,7 @@ variable "dtrack_oidc_client_id" {
 # ---------- Phase 2: Entra ----------
 
 variable "manage_entra" {
-  description = "Create the Entra groups and the Dependency-Track app registration with Terraform. Needs Graph permissions (Group.ReadWrite.All, Application.ReadWrite.OwnedBy) on the deploying identity; leave false to do it by hand."
+  description = "Create the Entra groups and the Dependency-Track app registration with Terraform. Needs Graph permissions (Group.ReadWrite.All, Application.ReadWrite.OwnedBy, AppRoleAssignment.ReadWrite.All, Application.Read.All) on the deploying identity; leave false to do it by hand (deployment runbook step 19)."
   type        = bool
   default     = false
 }

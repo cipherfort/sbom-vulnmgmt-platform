@@ -1,6 +1,6 @@
 # Enterprise SBOM platform — delivery plan
 
-Working checklist for the design in *Enterprise SBOM Platform — Design & Delivery Plan* (26 Oct 2026). The decision record is [ADR-0002](../adr/0002-enterprise-sbom-platform.md); day-to-day operation is in [how-to-use.md](../how-to-use.md).
+Working checklist for the design in *Enterprise SBOM Platform — Design & Delivery Plan* (26 Oct 2026). The decision record is [ADR-0002](../adr/0002-enterprise-sbom-platform.md). Day-to-day operation is in [how-to-use.md](../how-to-use.md). **The commands for every step, in order, are in the [deployment runbook](deployment-runbook.md)**; this page tracks what is done.
 
 Each item is tagged:
 
@@ -25,7 +25,7 @@ These changed the build. Each one is explained in ADR-0002.
 | 7 | A message that fails 5 times goes to poison | It went to poison silently: no row in `GitHubSbomRun_CL`, so coverage didn't show it. The last attempt now writes status `error`, and the coverage query counts it as Failed. |
 | 8 | System-assigned identities | User-assigned, so the Key Vault roles exist before the apps start (the Container Apps secret-reference chicken-and-egg). |
 | 9 | "No connection strings with keys" | One exception: a Container Apps Azure Files mount only supports account keys (`stdtrackprd`, private endpoint only, holds only caches). |
-| 10 | Contributor is enough to deploy | Terraform creates role assignments, so the deployer also needs **Role Based Access Control Administrator** (conditioned) on `rg-sbom-prd`, plus rights on the workspace and landing-zone resources. See README, Bootstrap. |
+| 10 | Contributor is enough to deploy | Terraform creates role assignments, so the deployer also needs **Role Based Access Control Administrator** (conditioned) on `rg-sbom-prd`, plus rights on the workspace and landing-zone resources. See the runbook, step 6. |
 | 11 | Enterprise config with paid features "off" | `disabled` with enforcement would switch GHAS code scanning and secret protection **off** where teams use them today. The script sets paid features to `not_set`. |
 | 12 | Collector `PUT /bom` with `parentName` | Uses `parentUUID` from a find-or-create of the parent. A new org needs no manual parent project before its first upload. |
 
@@ -44,7 +44,7 @@ These changed the build. Each one is explained in ADR-0002.
 - [ ] **[manual]** Create the Entra groups `sg-sbom-cps-admins` and one `sg-sbom-org-<org>` per org. Alternatively, set `manage_entra = true` in Phase 2.
 - [ ] **[manual]** Search our repos for scripts calling the old `/dependency-graph/sbom` endpoint and warn their owners before **13 Nov 2026**:
   `gh search code "dependency-graph/sbom" --owner <org>` for each org.
-- [ ] **[manual]** Bootstrap Azure: state storage, the deployer's federated credential and roles, `rg-sbom-prd`, and the `TF_VARS_JSON` secret (README, Bootstrap).
+- [ ] **[manual]** Bootstrap Azure: state storage, the deployer's federated credential and roles, `rg-sbom-prd`, and the `TF_VARS_JSON` secret ([runbook](deployment-runbook.md) steps 4–6 and 9).
 - [ ] **[check]** Gate: design agreed.
 
 ## Local proof of concept (from 1 Nov 2026, alongside Phase 0)
@@ -77,7 +77,7 @@ No Azure needed. Instructions: [poc/README.md](../../poc/README.md).
 ### Step 2 — Create the collector GitHub App
 - [ ] **[manual]** Enterprise → Settings → GitHub Apps → New GitHub App `cps-sbom-collector`, webhook off.
 - [ ] **[manual]** Repository permissions: Contents read, Metadata read, Dependabot alerts read. Installable only on this enterprise.
-- [ ] **[manual]** Generate a private key and store it: `az keyvault secret set --vault-name kv-sbom-prd -n github-app-private-key --file cps-sbom-collector.private-key.pem`. Then delete the `.pem` securely.
+- [ ] **[manual]** Generate a private key. Store it in Key Vault **after Step 3 has created the vault**, from a machine inside the network, with the Key Vault Secrets Officer role ([runbook](deployment-runbook.md) step 12). Then delete the `.pem`.
 - [ ] **[manual]** Record the App ID in `TF_VARS_JSON` (`github_app_id`).
 - [ ] **[manual]** Install the App on the CPS org with *All repositories*.
 
@@ -96,7 +96,7 @@ No Azure needed. Instructions: [poc/README.md](../../poc/README.md).
   - Portfolio access control on; NVD, OSV and GitHub Advisories sources on.
   - Teams `bom-uploader`, `ci-uploader`, `acl-sync` and `sg-sbom-cps-admins`. API keys go straight to Key Vault: `dtrack-api-key`, `dtrack-ci-api-key`, `dtrack-acl-key`.
   - The `CPS restricted` licence group and the three starter policies (warn/info).
-- [ ] **[manual]** Run it with `GITHUB_ADVISORIES_TOKEN` set to a read-only GitHub token: `python ops/dtrack_admin.py bootstrap --key-vault-url https://kv-sbom-prd.vault.azure.net/`.
+- [ ] **[manual]** Run it from a machine inside the network, with `DTRACK_URL`, `DTRACK_ADMIN_API_KEY` and `GITHUB_ADVISORIES_TOKEN` set ([runbook](deployment-runbook.md) step 14): `python ops/dtrack_admin.py bootstrap --key-vault-url https://kv-sbom-prd.vault.azure.net/`.
 - [ ] **[manual]** Register the Entra app for Dependency-Track (or let `manage_entra` do it in Phase 2):
   - SPA redirect `https://ca-dtrack-ui.<env-domain>/static/oidc-callback.html`.
   - `groups` claim as `cloud_displayname` for assigned groups.
@@ -131,7 +131,7 @@ No Azure needed. Instructions: [poc/README.md](../../poc/README.md).
 - [ ] **[code]** `entra.tf` (opt-in, `manage_entra = true`):
   - `sg-sbom-cps-admins` and `sg-sbom-org-<org>` for each entry in `sbom_orgs`.
   - The Dependency-Track app registration, which emits group display names and requires assignment.
-  - The deployer needs Graph `Group.ReadWrite.All` and `Application.ReadWrite.OwnedBy`.
+  - The deployer needs Graph `Group.ReadWrite.All`, `Application.ReadWrite.OwnedBy`, `AppRoleAssignment.ReadWrite.All` and `Application.Read.All`. Assigning groups to the app needs `AppRoleAssignment.ReadWrite.All`, which can grant any permission in the tenant, so the runbook recommends the manual route (step 19, option B).
 - [ ] **[manual]** Either set `manage_entra` and `sbom_orgs`, or create the groups and app by hand. Add each team's nominated members.
 - [ ] **[manual]** For each org, run `python ops/dtrack_admin.py onboard-org <org> --teams-webhook <url>`.
 - [ ] **[code]** `sync_dtrack_acl` (04:30 UTC nightly) keeps each org team's access current as repos appear. It reports parents with no team yet.

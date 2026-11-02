@@ -13,7 +13,7 @@ locals {
   }
 }
 
-# Created in bootstrap (README step 3) so the deployer's Contributor and RBAC
+# Created in bootstrap (deployment runbook step 6) so the deployer's Contributor and RBAC
 # Administrator roles can be scoped to this group alone.
 data "azurerm_resource_group" "this" {
   name = "rg-sbom-${local.env}"

@@ -1,6 +1,6 @@
 # Copy this file to terraform.tfvars and fill in values for your environment.
 # terraform.tfvars is gitignored — never commit real values. In CI these
-# come from the TF_VARS_JSON secret (see README, Bootstrap step 4).
+# come from the TF_VARS_JSON secret (see docs/enterprise-sbom/deployment-runbook.md, step 9).
 
 # ---------- Landing zone (Phase 0: confirm subscription, VNet, subnets) ----------
 vnet_id                    = "/subscriptions/<sub>/resourceGroups/<lz-rg>/providers/Microsoft.Network/virtualNetworks/<vnet>"

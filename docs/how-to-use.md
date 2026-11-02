@@ -1,6 +1,6 @@
 # How to use — Enterprise SBOM platform (Dependency-Track + Sentinel)
 
-This guide covers day-to-day use of the platform, onboarding an org, the Terraform CI path, container images, and what to do when something breaks. *Why* it is built this way: [ADR-0002](adr/0002-enterprise-sbom-platform.md). *What is left to do*: [delivery plan](enterprise-sbom/delivery-plan.md). *Deploying it*: [README](../README.md).
+This guide covers day-to-day use of the platform, onboarding an org, the Terraform CI path, container images, and what to do when something breaks. *Why* it is built this way: [ADR-0002](adr/0002-enterprise-sbom-platform.md). *What is left to do*: [delivery plan](enterprise-sbom/delivery-plan.md). *Deploying it*: [deployment runbook](enterprise-sbom/deployment-runbook.md).
 
 **Data classification: OFFICIAL-SENSITIVE.** An SBOM lists every library and version a service runs, which tells an attacker where to aim. No public dashboards, access by named group only, and no export outside the platform without CPS sign-off.
 
