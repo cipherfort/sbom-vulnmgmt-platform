@@ -2,6 +2,6 @@
 SbomLatest
 | join kind=inner (
     _GetWatchlist("BannedPackages")
-    | project PackageName = tostring(SearchKey), Reason = tostring(Reason)
+    | project PackageName = tostring(SearchKey), Reason = tostring(column_ifexists("Reason", ""))  // the column only exists once the watchlist has items
   ) on PackageName
 | project Org, Repo, Branch, PackageName, PackageVersion, Purl, Reason

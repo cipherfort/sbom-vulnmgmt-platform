@@ -382,7 +382,7 @@ EOF
 source ~/sbom-deploy.env
 echo "Forward $CAE_DOMAIN -> $CAE_IP"
 
-az functionapp show -g $RG -n $FUNC --query "{state:state, host:defaultHostName}" -o table
+az functionapp show -g $RG -n $FUNC --query "{state:properties.state, host:properties.defaultHostName}" -o table
 ```
 
 **Ask the landing-zone team** to make `$CAE_DOMAIN` resolve to `$CAE_IP` from the corporate network (a conditional forwarder or a wildcard record), so teams can reach Dependency-Track. Until that's done:
@@ -459,15 +459,19 @@ read -rs GITHUB_ADVISORIES_TOKEN && export GITHUB_ADVISORIES_TOKEN    # the read
 - Policy Management shows three policies.
 - Projects shows `$PILOT_ORG`.
 
-### Step 15 — Restart the collector
+### Step 15 — Restart the collector and the Dependency-Track API
 
 **Who:** platform engineer. **Where:** anywhere with `az`.
 
-The collector caches secrets for the life of an instance, so restart it to pick up the new keys:
+The collector caches secrets for the life of an instance, so restart it to pick up the new keys. Dependency-Track schedules its OSV mirror at startup, which was before `bootstrap` chose the ecosystems; until it restarts, the log says `Google OSV mirroring is disabled. No ecosystem selected` and OSV stays off for 24 hours.
 
 ```bash
 az functionapp restart -g $RG -n $FUNC
+REV=$(az containerapp revision list -g $RG -n ca-dtrack-api --query "[?properties.active].name | [0]" -o tsv)
+az containerapp revision restart -g $RG -n ca-dtrack-api --revision $REV
 ```
+
+The first NVD and OSV downloads take an hour or more. Projects uploaded before they finish show no vulnerabilities until the next analysis, so judge the first collection's vulnerability counts the next day.
 
 ---
 
@@ -479,7 +483,7 @@ az functionapp restart -g $RG -n $FUNC
 
 ```bash
 source ~/sbom-deploy.env
-FUNC_HOST=$(az functionapp show -g $RG -n $FUNC --query defaultHostName -o tsv)
+FUNC_HOST=$(az functionapp show -g $RG -n $FUNC --query properties.defaultHostName -o tsv)  # top-level defaultHostName is null on Flex Consumption
 MASTER=$(az functionapp keys list -g $RG -n $FUNC --query masterKey -o tsv)
 curl -sS -o /dev/null -w '%{http_code}\n' -X POST "https://$FUNC_HOST/admin/functions/enumerate_repos" \
   -H "x-functions-key: $MASTER" -H 'Content-Type: application/json' -d '{}'

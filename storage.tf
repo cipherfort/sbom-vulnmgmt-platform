@@ -50,9 +50,13 @@ resource "azurerm_storage_queue" "sbom_work_poison" {
   storage_account_id = azurerm_storage_account.sbom.id
 }
 
-resource "azurerm_storage_table" "repostate" {
-  name               = "repostate"
-  storage_account_id = azurerm_storage_account.sbom.id
+# azapi, not azurerm_storage_table: azurerm (4.81) creates tables over the data
+# plane even with storage_account_id, which public_network_access_enabled = false
+# blocks unless Terraform runs inside the VNet. This goes through ARM.
+resource "azapi_resource" "repostate" {
+  type      = "Microsoft.Storage/storageAccounts/tableServices/tables@2024-01-01"
+  name      = "repostate"
+  parent_id = "${azurerm_storage_account.sbom.id}/tableServices/default"
 }
 
 # Raw SBOM retention: 13 months, Cool after 30 days (decision table, §10).

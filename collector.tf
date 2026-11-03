@@ -9,6 +9,10 @@ locals {
 
   collector_app_settings = merge(
     {
+      # azurerm writes AzureWebJobsStorage as a connection string with an empty
+      # AccountKey, which wins over the identity settings below: the host then
+      # can't reach storage, so host keys and timer leases fail. Empty = unset.
+      AzureWebJobsStorage              = ""
       AzureWebJobsStorage__accountName = azurerm_storage_account.sbom.name
       SbomStorage__queueServiceUri     = azurerm_storage_account.sbom.primary_queue_endpoint
     },
@@ -121,6 +125,12 @@ resource "azurerm_function_app_flex_consumption" "collector" {
 
   site_config {
     application_insights_connection_string = azurerm_application_insights.collector.connection_string
+  }
+
+  # The provider hides AzureWebJobsStorage when it reads settings back, so the
+  # empty value above would show as a change on every plan. Created with it anyway.
+  lifecycle {
+    ignore_changes = [app_settings["AzureWebJobsStorage"]]
   }
 
   depends_on = [azurerm_role_assignment.collector]
