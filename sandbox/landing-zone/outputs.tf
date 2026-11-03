@@ -6,6 +6,17 @@ output "jump_vm" {
   }
 }
 
+output "jump_public_ip" {
+  description = "Set only when var.jump_ssh_allowed_ip is."
+  value       = one(azurerm_public_ip.jump[*].ip_address)
+}
+
+output "jump_ssh_private_key" {
+  description = "terraform output -raw jump_ssh_private_key > ~/.ssh/sbom-jump-tst"
+  value       = tls_private_key.jump.private_key_openssh
+  sensitive   = true
+}
+
 output "nat_public_ip" {
   description = "Outbound IP of the Function, Dependency-Track and the jump VM."
   value       = azurerm_public_ip.nat.ip_address

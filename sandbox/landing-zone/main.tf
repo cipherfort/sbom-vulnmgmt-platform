@@ -46,6 +46,12 @@ variable "address_space" {
   default = "10.10.0.0/24"
 }
 
+variable "jump_ssh_allowed_ip" {
+  description = "Your public IPv4. When set, the jump VM gets a public IP that accepts SSH from this address only, for an SSH SOCKS tunnel to the internal Dependency-Track UI. Empty removes it."
+  type        = string
+  default     = ""
+}
+
 locals {
   env = var.environment
   tags = {
@@ -183,10 +189,51 @@ resource "azurerm_sentinel_log_analytics_workspace_onboarding" "this" {
 }
 
 # ---------- Jump VM (the admin workstation) ----------
-# No public IP. Reach it with `az vm run-command invoke`, or Bastion if added.
+# No public IP unless var.jump_ssh_allowed_ip is set. Otherwise reach it with
+# `az vm run-command invoke`, or Bastion if added.
 
 resource "tls_private_key" "jump" {
   algorithm = "ED25519"
+}
+
+resource "azurerm_public_ip" "jump" {
+  count = var.jump_ssh_allowed_ip == "" ? 0 : 1
+
+  name                = "pip-vm-sbom-jump-${local.env}"
+  resource_group_name = azurerm_resource_group.lz.name
+  location            = azurerm_resource_group.lz.location
+  allocation_method   = "Static"
+  sku                 = "Standard"
+  tags                = local.tags
+}
+
+# Standard public IPs drop all inbound traffic unless an NSG allows it.
+resource "azurerm_network_security_group" "jump" {
+  count = var.jump_ssh_allowed_ip == "" ? 0 : 1
+
+  name                = "nsg-vm-sbom-jump-${local.env}"
+  resource_group_name = azurerm_resource_group.lz.name
+  location            = azurerm_resource_group.lz.location
+  tags                = local.tags
+
+  security_rule {
+    name                       = "ssh-from-operator"
+    priority                   = 100
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "22"
+    source_address_prefix      = "${var.jump_ssh_allowed_ip}/32"
+    destination_address_prefix = "*"
+  }
+}
+
+resource "azurerm_network_interface_security_group_association" "jump" {
+  count = var.jump_ssh_allowed_ip == "" ? 0 : 1
+
+  network_interface_id      = azurerm_network_interface.jump.id
+  network_security_group_id = azurerm_network_security_group.jump[0].id
 }
 
 resource "azurerm_network_interface" "jump" {
@@ -199,6 +246,7 @@ resource "azurerm_network_interface" "jump" {
     name                          = "ipconfig1"
     subnet_id                     = azurerm_subnet.this["mgmt"].id
     private_ip_address_allocation = "Dynamic"
+    public_ip_address_id          = one(azurerm_public_ip.jump[*].id)
   }
 }
 
