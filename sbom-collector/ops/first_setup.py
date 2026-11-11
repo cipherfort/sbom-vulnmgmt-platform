@@ -33,6 +33,13 @@ try:
 except ResourceNotFoundError:
     pw = ""
 
+# A vault recovered from soft delete keeps the password of an earlier
+# Dependency-Track; this one still has the default, so start again.
+if pw and requests.post(f"{API}/user/login", data={"username": "admin", "password": pw},
+                        timeout=30).status_code == 401:
+    print("Stored admin password doesn't work here; assuming a fresh Dependency-Track")
+    pw = ""
+
 if not pw:
     pw = secrets.token_hex(24)
     r = requests.post(f"{API}/user/forceChangePassword", timeout=30, data={

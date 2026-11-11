@@ -223,7 +223,7 @@ Also create a **read-only GitHub token** for Dependency-Track's GitHub Advisorie
 
 ```bash
 source ~/sbom-deploy.env
-gh auth refresh -h github.com -s write:org
+gh auth refresh -h github.com -s admin:org
 scripts/github/security-config.sh --org $ORG
 ```
 
@@ -595,7 +595,9 @@ terraform init && terraform destroy          # with the same tfvars, as the depl
 az monitor action-group delete -g $RG -n "Application Insights Smart Detection"
 ```
 
-The Key Vault is soft-deleted with purge protection, so its name is reserved for 90 days. A redeploy with the same name recovers it automatically (`recover_soft_deleted_key_vaults`).
+The Key Vault is soft-deleted with purge protection, so its name is reserved for 90 days. A redeploy with the same name recovers it automatically (`recover_soft_deleted_key_vaults`), with its old secrets:
+- **Its old firewall comes back too.** azurerm recovers the vault without applying `network_acls`. If the old vault had `Deny` (for example, one from the enterprise branch), the first apply fails at `ca-dtrack-api` with `unable to fetch secret 'db-password'`. The failed app is left in Azure but not in state, so delete it (`az containerapp delete -g $RG -n ca-dtrack-api --yes`) and apply again; that apply switches the vault to `Allow` and recreates the app.
+- **The old `dtrack-admin-password` comes back.** `first_setup.py` notices that it doesn't work on the new Dependency-Track and sets a new one.
 
 ## Troubleshooting the first deployment
 

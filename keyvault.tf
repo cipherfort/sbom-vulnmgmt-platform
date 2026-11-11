@@ -12,6 +12,14 @@ resource "azurerm_key_vault" "this" {
   purge_protection_enabled   = true
   soft_delete_retention_days = 90
   tags                       = local.tags
+
+  # Explicit, so a vault recovered from soft delete (same name redeployed)
+  # loses any firewall it had before.
+  public_network_access_enabled = true
+  network_acls {
+    default_action = "Allow"
+    bypass         = "AzureServices"
+  }
 }
 
 # The deploying identity (CI's OIDC service principal) writes the secrets

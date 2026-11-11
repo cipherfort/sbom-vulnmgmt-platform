@@ -6,8 +6,9 @@
 #   scripts/github/security-config.sh --org <org>
 #   scripts/github/security-config.sh --org <org> --include-configured
 #
-# Needs an org owner or security manager, with a token that has write:org
-# (`gh auth refresh -s write:org`). Read-only until it prints "Applying".
+# Needs an org owner or security manager, with a token that has admin:org
+# (`gh auth refresh -s admin:org`; the docs say write:org, but the API asks for
+# admin:org). Read-only until it prints "Applying".
 #
 # Two deliberate departures from "set everything":
 #   * Paid features are not_set, not disabled. With enforcement on, "disabled"
@@ -25,7 +26,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --org) ORG="$2"; shift 2 ;;
     --include-configured) INCLUDE_CONFIGURED=true; shift ;;
-    -h|--help) sed -n '2,19p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -39,9 +40,8 @@ api --paginate "/orgs/$ORG/code-security/configurations" \
 
 ID=$(api --paginate "/orgs/$ORG/code-security/configurations" --jq ".[] | select(.name == \"$NAME\") | .id")
 if [[ -z "$ID" ]]; then
-  ID=$(api -X POST "/orgs/$ORG/code-security/configurations" --input - --jq .id <<JSON
-{
-  "name": "$NAME",
+  body='{
+  "name": "'"$NAME"'",
   "description": "CPS SBOM platform: every repo has a dependency graph (docs/adr/0001-team-sbom-platform.md).",
   "dependency_graph": "enabled",
   "dependency_graph_autosubmit_action": "enabled",
@@ -50,9 +50,16 @@ if [[ -z "$ID" ]]; then
   "code_security": "not_set",
   "secret_protection": "not_set",
   "enforcement": "enforced"
-}
-JSON
-)
+}'
+  # Orgs without the unbundled Advanced Security plan reject the
+  # code_security / secret_protection fields outright, even as not_set. They
+  # have nothing to switch off, so retry without them.
+  if ! ID=$(api -X POST "/orgs/$ORG/code-security/configurations" --input - --jq .id <<<"$body" 2>"${TMPDIR:-/tmp}/sbom-config.err"); then
+    grep -q "unbundled Advanced Security" "${TMPDIR:-/tmp}/sbom-config.err" || { cat "${TMPDIR:-/tmp}/sbom-config.err" >&2; exit 1; }
+    echo "No Advanced Security plan in $ORG: creating without the code_security / secret_protection settings"
+    ID=$(jq 'del(.code_security, .secret_protection)' <<<"$body" \
+      | api -X POST "/orgs/$ORG/code-security/configurations" --input - --jq .id)
+  fi
   echo "Created $NAME (id $ID)"
 else
   echo "Found $NAME (id $ID)"
