@@ -16,8 +16,7 @@ mock_provider "azurerm" {
   }
   mock_resource "azurerm_container_app_environment" {
     defaults = {
-      default_domain    = "kindstone-1234abcd.uksouth.azurecontainerapps.io"
-      static_ip_address = "10.0.0.10"
+      default_domain = "kindstone-1234abcd.uksouth.azurecontainerapps.io"
     }
   }
   mock_resource "azurerm_key_vault" {
@@ -30,9 +29,9 @@ mock_provider "azurerm" {
       id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-sbom-prd/providers/Microsoft.Storage/storageAccounts/stsbomprd"
     }
   }
-  mock_resource "azurerm_monitor_data_collection_rule" {
+  mock_resource "azurerm_log_analytics_workspace" {
     defaults = {
-      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-sbom-prd/providers/Microsoft.Insights/dataCollectionRules/dcr-sbom-prd"
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-sbom-prd/providers/Microsoft.OperationalInsights/workspaces/log-sbom-prd"
     }
   }
   mock_resource "azurerm_application_insights" {
@@ -63,25 +62,11 @@ mock_provider "azuread" {
 mock_provider "random" {}
 
 variables {
-  vnet_id                    = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-lz/providers/Microsoft.Network/virtualNetworks/vnet-lz"
-  function_subnet_id         = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-lz/providers/Microsoft.Network/virtualNetworks/vnet-lz/subnets/func"
-  container_apps_subnet_id   = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-lz/providers/Microsoft.Network/virtualNetworks/vnet-lz/subnets/cae"
-  private_endpoint_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-lz/providers/Microsoft.Network/virtualNetworks/vnet-lz/subnets/pe"
-  private_dns_zone_ids = {
-    vault    = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-dns/providers/Microsoft.Network/privateDnsZones/privatelink.vaultcore.azure.net"
-    blob     = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-dns/providers/Microsoft.Network/privateDnsZones/privatelink.blob.core.windows.net"
-    queue    = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-dns/providers/Microsoft.Network/privateDnsZones/privatelink.queue.core.windows.net"
-    table    = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-dns/providers/Microsoft.Network/privateDnsZones/privatelink.table.core.windows.net"
-    file     = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-dns/providers/Microsoft.Network/privateDnsZones/privatelink.file.core.windows.net"
-    postgres = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-dns/providers/Microsoft.Network/privateDnsZones/privatelink.postgres.database.azure.com"
-  }
-  cps_workspace_id       = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-sentinel/providers/Microsoft.OperationalInsights/workspaces/law-cps"
-  github_enterprise_slug = "cps"
-  github_app_id          = "123456"
-  alert_email            = "cps-platform@example.org"
+  github_app_id = "123456"
+  alert_email   = "cps-platform@example.org"
 }
 
-run "phase1_defaults" {
+run "defaults" {
   command = plan
 
   assert {
@@ -90,30 +75,41 @@ run "phase1_defaults" {
   }
   assert {
     condition     = azurerm_storage_account.sbom.shared_access_key_enabled == false
-    error_message = "Collector storage must have shared keys off (N1)"
+    error_message = "Collector storage must have shared keys off"
   }
   assert {
-    condition     = length(azurerm_sentinel_watchlist_item.banned_packages) == 0
-    error_message = "No watchlist rows by default"
+    condition     = length(azurerm_container_app.dtrack_ui.ingress[0].ip_security_restriction) == 0
+    error_message = "No UI IP restriction unless allowed_ip_ranges is set"
   }
 }
 
-run "phase2_entra_and_watchlist" {
+run "ui_ip_restriction" {
   command = plan
 
   variables {
-    manage_entra    = true
-    sbom_orgs       = ["cps", "team-a"]
-    banned_packages = [{ PackageName = "event-stream", Reason = "test" }]
+    allowed_ip_ranges = ["203.0.113.0/24", "198.51.100.10/32"]
   }
 
   assert {
-    condition     = length(azuread_group.sbom) == 3
-    error_message = "One admin group plus one group per org"
+    condition     = length(azurerm_container_app.dtrack_ui.ingress[0].ip_security_restriction) == 2
+    error_message = "One UI allow rule per allowed_ip_ranges entry"
   }
   assert {
-    condition     = contains(keys(azuread_group.sbom), "sg-sbom-org-team-a")
-    error_message = "Org groups follow sg-sbom-org-<org>, the name dtrack.py's ORG_TEAM expects"
+    condition     = length(azurerm_container_app.dtrack_api.ingress[0].ip_security_restriction) == 0
+    error_message = "The API must stay open: the collector has no fixed outbound IP"
+  }
+}
+
+run "entra" {
+  command = plan
+
+  variables {
+    manage_entra = true
+  }
+
+  assert {
+    condition     = toset(keys(azuread_group.sbom)) == toset(["sg-sbom-cps-admins", "sg-sbom-cps-users"])
+    error_message = "Groups must match the team names dtrack_admin.py bootstrap maps"
   }
   assert {
     condition     = length(local.dtrack_api_oidc_env) == 7

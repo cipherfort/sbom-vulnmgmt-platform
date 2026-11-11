@@ -5,22 +5,21 @@ terraform {
     azurerm = {
       source = "hashicorp/azurerm"
       # 4.x line. azurerm_function_app_flex_consumption and the
-      # storage_account_id (management-plane) form of storage containers,
-      # queues and tables need a recent 4.x — those matter here because the
-      # storage accounts have public access off, so the deployer can't use
-      # the data plane.
+      # storage_account_id (management-plane) form of storage containers and
+      # queues need a recent 4.x — they let the deployer create them without
+      # a storage data-plane role.
       version = "~> 4.60"
     }
     azapi = {
       source = "Azure/azapi"
-      # Custom Log Analytics tables with an explicit column schema — azurerm
-      # has no resource for that.
+      # The repostate table over ARM: azurerm_storage_table uses the data
+      # plane, which would need a storage data role on the deployer.
       version = "~> 2.0"
     }
     azuread = {
       source = "hashicorp/azuread"
-      # Phase 2 Entra groups and the Dependency-Track app registration.
-      # Only used when var.manage_entra is true.
+      # Entra groups and the Dependency-Track app registration. Only used
+      # when var.manage_entra is true.
       version = "~> 3.0"
     }
     random = {
@@ -30,10 +29,8 @@ terraform {
   }
 
   # Storage account referenced here must exist before `terraform init` —
-  # see docs/enterprise-sbom/deployment-runbook.md, step 4. New state key: this is a rebuild, not an
-  # in-place change of the old rg-security-platform stack, so the first
-  # apply can't destroy that stack by accident. Decommissioning it is an
-  # explicit checklist step in docs/enterprise-sbom/delivery-plan.md.
+  # see docs/deployment-runbook.md, step 3. Its own state key, so an apply
+  # can never touch the old rg-security-platform stack from main.
   backend "azurerm" {
     resource_group_name  = "rg-tfstate-security-platform"
     storage_account_name = "stsecplatstate001"

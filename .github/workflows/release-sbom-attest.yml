@@ -1,6 +1,6 @@
 name: Reusable Release SBOM Attestation
 
-# Phase 3: release-time SBOM, signed as an artifact attestation bound to the
+# Optional: release-time SBOM, signed as an artifact attestation bound to the
 # image digest — the answer to "the SBOM shows the default branch, not what
 # is deployed" in the design doc's risk table.
 #

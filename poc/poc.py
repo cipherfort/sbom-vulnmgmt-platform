@@ -5,10 +5,9 @@ Docker and Azurite. No Azure subscription needed. Setup: poc/README.md.
   python poc/poc.py ratelimit <org> [--probe <repo>]
   python poc/poc.py collect <org>/<repo> [...]
   python poc/poc.py enumerate                   # every repo the App can see: mind the rate limit
-  python poc/poc.py drain | acl | status
+  python poc/poc.py drain | status
 
 Settings come from sbom-collector/local.settings.json, as for `func start`.
-Rows meant for Sentinel are written to poc/out/<stream>.jsonl instead.
 """
 import argparse
 import json
@@ -59,13 +58,13 @@ class Msg:
         return self._body
 
 
-# ---------- show what the collector does, and keep the Sentinel rows ----------
+# ---------- show what the collector does ----------
 _finish, _requeue = fa._finish, fa._requeue
 
 
-def _show_finish(job, status, count, detail="", extra=None):
+def _show_finish(job, status, count, detail=""):
     print(f"  {job['org']}/{job['repo']}: {status}, {count} components {detail}".rstrip())
-    _finish(job, status, count, detail, extra)
+    _finish(job, status, count, detail)
 
 
 def _show_requeue(job, delay):
@@ -74,16 +73,7 @@ def _show_requeue(job, delay):
     _requeue(job, delay)
 
 
-def _write_rows(stream, rows):
-    if rows:
-        OUT.mkdir(exist_ok=True)
-        with (OUT / f"{stream.removeprefix('Custom-')}.jsonl").open("a") as f:
-            f.writelines(json.dumps(r) + "\n" for r in rows)
-
-
 fa._finish, fa._requeue = _show_finish, _show_requeue
-if not os.environ.get("DCE_ENDPOINT"):
-    fa._send = _write_rows
 
 
 # ---------- helpers ----------
@@ -195,7 +185,7 @@ def cmd_dt_init(args):
 
 
 def cmd_ratelimit(args):
-    """Phase 1 check: what limit does an App installation get for dependency_sbom?"""
+    """What limit does an App installation get for dependency_sbom?"""
     token = fa._install_token(installation(args.org))
     r = gh("rate_limit", token)
     result = {"org": args.org, "rate_limit": r.json()["resources"]}
@@ -213,7 +203,7 @@ def cmd_ratelimit(args):
                 print(f"  {k}: {v}")
     OUT.mkdir(exist_ok=True)
     (OUT / f"ratelimit-{args.org}.json").write_text(json.dumps(result, indent=2))
-    print(f"\nSaved to {OUT / f'ratelimit-{args.org}.json'}; note the dependency_sbom limit in the delivery plan")
+    print(f"\nSaved to {OUT / f'ratelimit-{args.org}.json'}")
 
 
 def cmd_collect(args):
@@ -247,12 +237,6 @@ def cmd_drain(args):
     cmd_status(args)
 
 
-def cmd_acl(args):
-    require_dtrack()
-    fa.sync_dtrack_acl(None)
-    print("ACL sync done (see log lines above)")
-
-
 def cmd_status(args):
     ensure_storage()
     rows = sorted(fa._state().list_entities(), key=lambda e: (e["PartitionKey"], e["RowKey"]))
@@ -262,7 +246,7 @@ def cmd_status(args):
               f"{e['LastRun'][:19]}")
     blobs = sum(1 for _ in fa._blobs().list_blobs())
     print(f"\n{len(rows)} repos, {blobs} raw SBOMs in Azurite. Dependency-Track: http://localhost:8080 "
-          f"(admin password in {SECRETS / 'dtrack-admin-password'}). Sentinel rows: {OUT}/")
+          f"(admin password in {SECRETS / 'dtrack-admin-password'})")
 
 
 def main():
@@ -282,7 +266,6 @@ def main():
     p.add_argument("repos", nargs="+", metavar="ORG/REPO")
     sub.add_parser("enumerate", help="Run the nightly enumeration over every installation, then drain")
     sub.add_parser("drain", help="Process whatever is left on the queue")
-    sub.add_parser("acl", help="Run the nightly Dependency-Track ACL sync")
     sub.add_parser("status", help="Per-repo outcome from the repostate table")
     args = ap.parse_args()
     globals()[f"cmd_{args.cmd.replace('-', '_')}"](args)

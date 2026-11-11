@@ -1,7 +1,7 @@
-# Phase 2, optional: Entra groups and the Dependency-Track app registration.
-# Off by default (var.manage_entra) because it needs Microsoft Graph
-# permissions most deployment identities don't have; the delivery plan has
-# the equivalent manual steps.
+# Optional: Entra groups and the Dependency-Track app registration. Off by
+# default (var.manage_entra) because it needs Microsoft Graph permissions
+# most deployment identities don't have; deployment runbook step 17 has the
+# equivalent manual steps.
 
 locals {
   entra_count = var.manage_entra ? 1 : 0
@@ -11,10 +11,11 @@ locals {
   # this app's client ID — reading the FQDN back would be a cycle.
   dtrack_ui_url = "https://ca-dtrack-ui.${azurerm_container_app_environment.this.default_domain}"
 
-  entra_groups = var.manage_entra ? merge(
-    { "sg-sbom-cps-admins" = "CPS security: sees every org in Dependency-Track and Sentinel" },
-    { for org in var.sbom_orgs : "sg-sbom-org-${org}" => "Team for GitHub org ${org}: sees only that org's Dependency-Track projects" },
-  ) : {}
+  # Named as the Dependency-Track teams dtrack_admin.py bootstrap maps them to.
+  entra_groups = var.manage_entra ? {
+    "sg-sbom-cps-admins" = "CPS: administers Dependency-Track (teams, policies, configuration)"
+    "sg-sbom-cps-users"  = "CPS: views and triages findings in Dependency-Track"
+  } : {}
 }
 
 data "azuread_client_config" "current" {
@@ -37,9 +38,9 @@ resource "azuread_application" "dtrack" {
   owners       = [data.azuread_client_config.current[0].object_id]
 
   # Emit only groups assigned to this app, as display names — so the
-  # groups claim carries "sg-sbom-org-<org>", which is what the OIDC group
-  # mappings in Dependency-Track are named after (dtrack_admin.py
-  # onboard-org), and the token stays small.
+  # groups claim carries "sg-sbom-cps-admins" / "sg-sbom-cps-users", which
+  # is what the OIDC group mappings in Dependency-Track are named after
+  # (dtrack_admin.py bootstrap), and the token stays small.
   group_membership_claims = ["ApplicationGroup"]
 
   optional_claims {
@@ -66,7 +67,7 @@ resource "azuread_service_principal" "dtrack" {
   client_id = azuread_application.dtrack[0].client_id
   owners    = [data.azuread_client_config.current[0].object_id]
 
-  # Only members of the assigned groups below can sign in at all (N2).
+  # Only members of the assigned groups below can sign in at all.
   app_role_assignment_required = true
 }
 

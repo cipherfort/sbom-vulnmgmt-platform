@@ -1,4 +1,15 @@
-# N5: collector failures alert CPS within one working day.
+# The platform's own workspace: Container Apps logs, Application Insights
+# for the collector, and the diagnostic settings below.
+resource "azurerm_log_analytics_workspace" "this" {
+  name                = "log-sbom-${local.env}"
+  resource_group_name = data.azurerm_resource_group.this.name
+  location            = data.azurerm_resource_group.this.location
+  sku                 = "PerGB2018"
+  retention_in_days   = 90
+  tags                = local.tags
+}
+
+# Collector failures alert the team within one working day.
 
 resource "azurerm_monitor_action_group" "sbom" {
   name                = "ag-sbom-${local.env}"
@@ -83,7 +94,7 @@ resource "azurerm_monitor_scheduled_query_rules_alert_v2" "enumerate_missing" {
   }
 }
 
-# Function, Key Vault and Postgres diagnostics to the CPS workspace. The
+# Function, Key Vault and Postgres diagnostics to the workspace above. The
 # Container Apps environment already sends its logs there through
 # log_analytics_workspace_id.
 resource "azurerm_monitor_diagnostic_setting" "sbom" {
@@ -93,9 +104,9 @@ resource "azurerm_monitor_diagnostic_setting" "sbom" {
     postgres = { id = azurerm_postgresql_flexible_server.dtrack.id, category = null, group = "allLogs" }
   }
 
-  name                       = "to-cps-workspace"
+  name                       = "to-log-sbom"
   target_resource_id         = each.value.id
-  log_analytics_workspace_id = var.cps_workspace_id
+  log_analytics_workspace_id = azurerm_log_analytics_workspace.this.id
 
   enabled_log {
     category       = each.value.category

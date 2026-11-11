@@ -1,6 +1,6 @@
 name: Reusable Container Image SBOM
 
-# Phase 3 (F7): build-time SBOMs for container images.
+# Optional: build-time SBOMs for container images.
 #
 # Called from a repo that builds an image as:
 #   jobs:
@@ -19,9 +19,8 @@ name: Reusable Container Image SBOM
 #
 # Syft scans the image and submits the result to GitHub's dependency
 # submission API, so the image's OS packages and libraries appear in the
-# repo's dependency graph. The enterprise collector already exports that
-# graph nightly, so the image lands in Dependency-Track and Sentinel with
-# no platform change. Only default-branch submissions show in the
+# repo's dependency graph. The collector already exports that graph
+# nightly, so the image lands in Dependency-Track with no platform change. Only default-branch submissions show in the
 # dependency graph (and so in the collector's SBOM): call this from the
 # default-branch build, not from every PR.
 on:

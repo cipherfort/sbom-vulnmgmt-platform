@@ -6,6 +6,5 @@ azure-keyvault-secrets==4.11.3
 azure-storage-blob==12.31.0
 azure-storage-queue==12.18.0
 azure-data-tables==12.7.0
-azure-monitor-ingestion==1.1.0
 PyJWT[crypto]==2.15.1
 requests==2.34.2

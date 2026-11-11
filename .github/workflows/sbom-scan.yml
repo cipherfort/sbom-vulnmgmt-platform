@@ -9,7 +9,7 @@ name: Reusable SBOM Scan
 #   secrets:
 #     dependency_track_api_key: ${{ secrets.DEPENDENCY_TRACK_API_KEY }}   # the ci-uploader team's key
 #
-# Why this still exists next to the enterprise collector (ADR-0002): the
+# Why this still exists next to the collector (ADR-0001): the
 # collector reads GitHub's dependency graph, and the dependency graph has no
 # Terraform ecosystem. This workflow builds the Terraform SBOM from
 # .terraform.lock.hcl and uploads it to the same Dependency-Track.
@@ -20,8 +20,8 @@ name: Reusable SBOM Scan
 # components. The org parent must already exist (the collector creates it on
 # its first run for the org, or dtrack_admin.py onboard-org does).
 #
-# Runs on cps-ubuntu-latest-private because Dependency-Track is internal-only:
-# the runner needs a network path to the Container Apps environment.
+# The Dependency-Track API is on a public endpoint, so any runner that can
+# reach the internet works; the API key is what authorises the upload.
 on:
   workflow_call:
     inputs:

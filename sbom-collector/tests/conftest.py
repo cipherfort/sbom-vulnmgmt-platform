@@ -7,7 +7,6 @@ import pytest
 # function_app reads these at import time.
 os.environ.setdefault("SBOM_STORAGE_ACCOUNT", "stsbomtest")
 os.environ.setdefault("GITHUB_APP_ID", "123456")
-os.environ.setdefault("GITHUB_ENTERPRISE", "cps-test")
 os.environ.setdefault("KEY_VAULT_URL", "https://kv-sbom-test.vault.azure.net/")
 os.environ.setdefault("DTRACK_URL", "https://dtrack.test")
 

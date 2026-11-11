@@ -1,7 +1,7 @@
 # Sample CI workflow for a Terraform (or npm) repo using this platform.
 #
 # Only needed for Terraform: GitHub's dependency graph has no Terraform
-# ecosystem, so the enterprise collector can't see providers. Every other
+# ecosystem, so the collector can't see providers. Every other
 # ecosystem the dependency graph supports is collected centrally each night
 # with no change to your repo.
 #

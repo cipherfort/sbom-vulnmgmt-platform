@@ -57,7 +57,7 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      # Landing-zone IDs, workspace ID, GitHub App ID etc. — none secret, but
+      # GitHub App ID, alert mailbox, UI IP ranges etc. — none secret, but
       # environment-specific, so they live in one secret rather than in git.
       # Shape: terraform.tfvars.example as JSON.
       - name: Write terraform.tfvars.json
@@ -112,8 +112,8 @@ jobs:
         with:
           python-version: "3.11" # must match the Function App runtime_version
 
-      # Dependencies are installed here, not by a remote build: a remote build
-      # would need the Function's VNet to reach PyPI.
+      # Dependencies are installed here, not by a remote build, so what is
+      # deployed is exactly what this run installed.
       - name: Package
         working-directory: sbom-collector
         run: pip install --target .python_packages/lib/site-packages -r requirements.txt

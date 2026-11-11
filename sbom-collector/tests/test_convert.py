@@ -1,6 +1,6 @@
 from collections import Counter
 
-from convert import ecosystem, licence, refresh_weekday, sentinel_rows, spdx_to_cyclonedx
+from convert import licence, refresh_weekday, spdx_to_cyclonedx
 
 
 def _purls(spdx):
@@ -54,24 +54,6 @@ def test_metadata(spdx):
     assert cdx["bomFormat"] == "CycloneDX" and cdx["specVersion"] == "1.5"
     assert cdx["metadata"]["component"] == {"type": "application", "name": "actions/setup-python", "version": "main"}
     assert cdx["metadata"]["timestamp"] == "2026-10-27T02:00:00+00:00"
-
-
-def test_ecosystem():
-    assert ecosystem("pkg:npm/%40azure/core-rest-pipeline@1.0.0") == "npm"
-    assert ecosystem("pkg:pypi/packaging@20.7") == "pypi"
-    assert ecosystem("") == ""
-
-
-def test_sentinel_rows(spdx):
-    cdx = spdx_to_cyclonedx(spdx, "actions", "setup-python", "main")
-    rows = sentinel_rows(cdx, "actions", "setup-python", "main", "2026-10-27T02:00:00+00:00")
-    assert len(rows) == len(cdx["components"])
-    assert {r["TimeGenerated"] for r in rows} == {"2026-10-27T02:00:00+00:00"}  # one snapshot, one timestamp
-    pkg = next(r for r in rows if r["PackageName"] == "packaging")
-    assert pkg == {"TimeGenerated": "2026-10-27T02:00:00+00:00", "Org": "actions", "Repo": "setup-python",
-                   "Branch": "main", "PackageName": "packaging", "PackageVersion": "20.7",
-                   "Purl": "pkg:pypi/packaging@20.7", "Ecosystem": "pypi", "License": "Apache-2.0 AND BSD-2-Clause"}
-    assert next(r for r in rows if r["PackageName"] == "kivy-deps-gstreamer")["License"] == ""
 
 
 def test_refresh_weekday_is_stable_and_spread():

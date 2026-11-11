@@ -1,0 +1,11 @@
+// Latest collector outcome per repo, from the "sbom-result" lines function_app.py
+// logs. Run in Application Insights appi-sbom-<env> -> Logs. Statuses are
+// explained in docs/how-to-use.md ("Collector statuses").
+traces
+| where timestamp > ago(8d) and message startswith "sbom-result "
+| extend r = parse_json(substring(message, strlen("sbom-result ")))
+| extend Org = tostring(r.Org), Repo = tostring(r.Repo), Status = tostring(r.Status),
+         ComponentCount = toint(r.ComponentCount), Detail = tostring(r.Detail)
+| summarize arg_max(timestamp, Status, ComponentCount, Detail) by Org, Repo
+// Summary: comment out the next line to list every repo instead.
+| summarize Repos = count(), Components = sum(ComponentCount) by Status

@@ -1,4 +1,4 @@
-# ---------- stsbomprd: raw SBOM archive, work queue, state table ----------
+# ---------- stsbom<env>: raw SBOM archive, work queue, state table ----------
 
 resource "azurerm_storage_account" "sbom" {
   name                     = "stsbom${local.env}${local.sfx}"
@@ -9,14 +9,15 @@ resource "azurerm_storage_account" "sbom" {
   min_tls_version          = "TLS1_2"
   tags                     = local.tags
 
-  # No keys anywhere (N1): every caller uses Entra ID.
+  # No keys: every caller uses Entra ID. The public endpoint stays on
+  # because the Function has no fixed outbound IP to allow through a
+  # firewall; without a key, a caller still needs a data role here.
   shared_access_key_enabled       = false
   default_to_oauth_authentication = true
   allow_nested_items_to_be_public = false
-  public_network_access_enabled   = false
 
   blob_properties {
-    # F2: history of what each repo contained. Versioning keeps overwritten
+    # History of what each repo contained. Versioning keeps overwritten
     # same-day blobs too.
     versioning_enabled = true
 
@@ -51,15 +52,15 @@ resource "azurerm_storage_queue" "sbom_work_poison" {
 }
 
 # azapi, not azurerm_storage_table: azurerm (4.81) creates tables over the data
-# plane even with storage_account_id, which public_network_access_enabled = false
-# blocks unless Terraform runs inside the VNet. This goes through ARM.
+# plane even with storage_account_id, so the deployer would need a table data
+# role. This goes through ARM, which Contributor covers.
 resource "azapi_resource" "repostate" {
   type      = "Microsoft.Storage/storageAccounts/tableServices/tables@2024-01-01"
   name      = "repostate"
   parent_id = "${azurerm_storage_account.sbom.id}/tableServices/default"
 }
 
-# Raw SBOM retention: 13 months, Cool after 30 days (decision table, §10).
+# Raw SBOM retention: 13 months, Cool after 30 days.
 resource "azurerm_storage_management_policy" "sbom" {
   storage_account_id = azurerm_storage_account.sbom.id
 
@@ -85,68 +86,26 @@ resource "azurerm_storage_management_policy" "sbom" {
   }
 }
 
-resource "azurerm_private_endpoint" "sbom" {
-  for_each = toset(["blob", "queue", "table"])
-
-  name                = "pe-stsbom-${each.key}-${local.env}"
-  resource_group_name = data.azurerm_resource_group.this.name
-  location            = data.azurerm_resource_group.this.location
-  subnet_id           = var.private_endpoint_subnet_id
-  tags                = local.tags
-
-  private_service_connection {
-    name                           = each.key
-    private_connection_resource_id = azurerm_storage_account.sbom.id
-    subresource_names              = [each.key]
-    is_manual_connection           = false
-  }
-
-  private_dns_zone_group {
-    name                 = "default"
-    private_dns_zone_ids = [var.private_dns_zone_ids[each.key]]
-  }
-}
-
-# ---------- stdtrackprd: Dependency-Track /data ----------
+# ---------- stdtrack<env>: Dependency-Track /data ----------
 #
 # Deliberate exception to "no keys": a Container Apps Azure Files mount only
 # supports account-key auth. The key lives in the environment's storage
-# config only; the account is private-endpoint-only and holds nothing but
-# Dependency-Track's mirror cache and search indexes (all rebuildable).
+# config only, and the account holds nothing but Dependency-Track's mirror
+# cache and search indexes (all rebuildable).
 
 resource "azurerm_storage_account" "dtrack" {
-  name                          = "stdtrack${local.env}${local.sfx}"
-  resource_group_name           = data.azurerm_resource_group.this.name
-  location                      = data.azurerm_resource_group.this.location
-  account_tier                  = "Standard"
-  account_replication_type      = "ZRS"
-  min_tls_version               = "TLS1_2"
-  public_network_access_enabled = false
-  tags                          = local.tags
+  name                            = "stdtrack${local.env}${local.sfx}"
+  resource_group_name             = data.azurerm_resource_group.this.name
+  location                        = data.azurerm_resource_group.this.location
+  account_tier                    = "Standard"
+  account_replication_type        = "ZRS"
+  min_tls_version                 = "TLS1_2"
+  allow_nested_items_to_be_public = false
+  tags                            = local.tags
 }
 
 resource "azurerm_storage_share" "dtrack_data" {
   name               = "dtrack-data"
   storage_account_id = azurerm_storage_account.dtrack.id
   quota              = 100
-}
-
-resource "azurerm_private_endpoint" "dtrack_file" {
-  name                = "pe-stdtrack-file-${local.env}"
-  resource_group_name = data.azurerm_resource_group.this.name
-  location            = data.azurerm_resource_group.this.location
-  subnet_id           = var.private_endpoint_subnet_id
-  tags                = local.tags
-
-  private_service_connection {
-    name                           = "file"
-    private_connection_resource_id = azurerm_storage_account.dtrack.id
-    subresource_names              = ["file"]
-    is_manual_connection           = false
-  }
-
-  private_dns_zone_group {
-    name                 = "default"
-    private_dns_zone_ids = [var.private_dns_zone_ids["file"]]
-  }
 }

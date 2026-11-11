@@ -1,5 +1,5 @@
-"""One-off and per-org Dependency-Track setup, run by CPS from a machine that
-can reach the internal Dependency-Track API. Idempotent: safe to re-run.
+"""One-off Dependency-Track setup, run by CPS. Idempotent: safe to re-run.
+ops/first_setup.py runs both commands for a new deployment.
 
   export DTRACK_URL=https://ca-dtrack-api.<env-domain>
   export DTRACK_ADMIN_API_KEY=...  # team with ACCESS_MANAGEMENT, SYSTEM_CONFIGURATION, POLICY_MANAGEMENT
@@ -7,10 +7,8 @@ can reach the internal Dependency-Track API. Idempotent: safe to re-run.
 
   python ops/dtrack_admin.py bootstrap --key-vault-url https://kv-sbom-prd.vault.azure.net/
   python ops/dtrack_admin.py onboard-org cps --teams-webhook https://...
-  python ops/dtrack_admin.py sync-acl
 
-See docs/enterprise-sbom/delivery-plan.md (Phase 1 step 4, Phase 2) and
-docs/how-to-use.md ("Onboarding an org").
+See docs/deployment-runbook.md (step 12) and docs/how-to-use.md.
 """
 import argparse
 import json
@@ -19,32 +17,33 @@ import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
-from dtrack import ORG_TEAM, UPLOADER_TEAMS, DependencyTrack  # noqa: E402
+from dtrack import DependencyTrack  # noqa: E402
 
-CPS_ADMINS = "sg-sbom-cps-admins"
+# The two teams people sign in to, named after their Entra groups so the OIDC
+# group mappings line up (entra.tf creates the groups with these names).
+CPS_ADMINS, CPS_USERS = "sg-sbom-cps-admins", "sg-sbom-cps-users"
 
-# Team -> permissions. ACCESS_MANAGEMENT also bypasses portfolio access
-# control in Dependency-Track 4.x, which is how CPS "sees everything" (N2).
+# Team -> permissions. Portfolio access control stays off: one team uses this
+# instance, so everyone with VIEW_PORTFOLIO sees every project.
 TEAMS = {
     "bom-uploader": ["BOM_UPLOAD", "PROJECT_CREATION_UPLOAD", "VIEW_PORTFOLIO", "PORTFOLIO_MANAGEMENT"],
     "ci-uploader": ["BOM_UPLOAD", "PROJECT_CREATION_UPLOAD", "VIEW_PORTFOLIO"],
-    "acl-sync": ["ACCESS_MANAGEMENT", "VIEW_PORTFOLIO"],
     CPS_ADMINS: ["ACCESS_MANAGEMENT", "VIEW_PORTFOLIO", "PORTFOLIO_MANAGEMENT", "VIEW_VULNERABILITY",
                  "VULNERABILITY_ANALYSIS", "VULNERABILITY_MANAGEMENT", "VIEW_POLICY_VIOLATION",
                  "POLICY_VIOLATION_ANALYSIS", "POLICY_MANAGEMENT", "SYSTEM_CONFIGURATION"],
+    CPS_USERS: ["VIEW_PORTFOLIO", "VIEW_VULNERABILITY", "VULNERABILITY_ANALYSIS",
+                "VIEW_POLICY_VIOLATION", "POLICY_VIOLATION_ANALYSIS"],
 }
-ORG_TEAM_PERMISSIONS = ["VIEW_PORTFOLIO", "VIEW_VULNERABILITY", "VULNERABILITY_ANALYSIS",
-                        "VIEW_POLICY_VIOLATION", "POLICY_VIOLATION_ANALYSIS"]
 # Team -> Key Vault secret its generated API key goes to. The collector reads
-# the first two; ci-uploader's key is copied to GitHub as the
+# dtrack-api-key; ci-uploader's key is copied to GitHub as the
 # DEPENDENCY_TRACK_API_KEY secret for sbom-scan.yml.
-KEY_SECRETS = {"bom-uploader": "dtrack-api-key", "acl-sync": "dtrack-acl-key", "ci-uploader": "dtrack-ci-api-key"}
+KEY_SECRETS = {"bom-uploader": "dtrack-api-key", "ci-uploader": "dtrack-ci-api-key"}
 
 OSV_ECOSYSTEMS = ["npm", "PyPI", "Maven", "Go", "NuGet", "RubyGems", "crates.io", "Packagist", "Pub", "Hex",
                   "GitHub Actions", "SwiftURL"]
 RESTRICTED_LICENCES = ["AGPL-1.0-only", "AGPL-1.0-or-later", "AGPL-3.0-only", "AGPL-3.0-or-later", "SSPL-1.0"]
 
-# Starter policies from the design doc, all warn/info for the first 3 months.
+# Starter policies, all warn/info for the first 3 months.
 POLICIES = [
     {"name": "Critical or high vulnerability", "violationState": "WARN",
      "conditions": [{"subject": "SEVERITY", "operator": "IS", "value": "CRITICAL"},
@@ -111,7 +110,7 @@ def ensure_policy(dt, spec, existing, restricted_group_uuid):
 
 def bootstrap(dt, args):
     props = [
-        ("access-management", "acl.enabled", "true"),
+        ("access-management", "acl.enabled", "false"),
         ("vuln-source", "nvd.enabled", "true"),
         ("vuln-source", "google.osv.enabled", ";".join(OSV_ECOSYSTEMS)),
     ]
@@ -123,15 +122,17 @@ def bootstrap(dt, args):
         print("GITHUB_ADVISORIES_TOKEN not set: GitHub Advisories mirror left as is", file=sys.stderr)
     dt.call("POST", "configProperty/aggregate",
             json=[{"groupName": g, "propertyName": p, "propertyValue": v} for g, p, v in props])
-    print("Portfolio access control on; NVD, OSV" + (", GitHub Advisories" if token else "") + " enabled")
+    print("Portfolio access control off; NVD, OSV" + (", GitHub Advisories" if token else "") + " enabled")
 
     for name, perms in TEAMS.items():
         team = ensure_team(dt, name, perms)
         if name in KEY_SECRETS and args.generate_keys and not team.get("apiKeys"):
             key = dt.call("PUT", f"team/{team['uuid']}/key").json()["key"]
             store_key(name, key, args.key_vault_url)
-    ensure_oidc_mapping(dt, CPS_ADMINS, dt.teams()[CPS_ADMINS]["uuid"])
-    print(f"Teams ready: {', '.join(TEAMS)}; {CPS_ADMINS} mapped to its Entra group")
+    teams = dt.teams()
+    for name in (CPS_ADMINS, CPS_USERS):
+        ensure_oidc_mapping(dt, name, teams[name]["uuid"])
+    print(f"Teams ready: {', '.join(TEAMS)}; {CPS_ADMINS} and {CPS_USERS} mapped to their Entra groups")
 
     groups = {g["name"]: g for g in dt.call("GET", "licenseGroup").json()}
     group = groups.get("CPS restricted") or dt.call("PUT", "licenseGroup", json={"name": "CPS restricted"}).json()
@@ -149,13 +150,7 @@ def bootstrap(dt, args):
 def onboard_org(dt, args):
     org = args.org
     parent_uuid = dt.ensure_parent(org)
-    team = ensure_team(dt, ORG_TEAM.format(org=org), ORG_TEAM_PERMISSIONS)
-    ensure_oidc_mapping(dt, team["name"], team["uuid"])
-    teams = dt.teams()
-    for name in [team["name"], *UPLOADER_TEAMS]:
-        if name in teams:
-            dt.grant(teams[name]["uuid"], parent_uuid)
-    print(f"{org}: parent project {parent_uuid}, team {team['name']} mapped to its Entra group and ACL")
+    print(f"{org}: parent project {parent_uuid}")
 
     if args.teams_webhook:
         publisher = next(p for p in dt.call("GET", "notification/publisher").json() if p["name"] == "Microsoft Teams")
@@ -171,16 +166,6 @@ def onboard_org(dt, args):
         dt.call("POST", f"notification/rule/{rule['uuid']}/project/{parent_uuid}", ok=(304,))
         print(f"{org}: notifications for new vulnerabilities and policy violations go to the Teams webhook")
 
-    granted, _ = dt.sync_acl()
-    print(f"ACL sync: {granted} new mappings")
-
-
-def sync_acl(dt, args):
-    granted, missing = dt.sync_acl()
-    print(f"ACL sync: {granted} new mappings")
-    if missing:
-        print(f"Parents with no team yet (run onboard-org): {', '.join(missing)}", file=sys.stderr)
-
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -189,14 +174,13 @@ def main():
     b.add_argument("--key-vault-url", help="Store generated API keys here (otherwise printed once to stderr)")
     b.add_argument("--no-generate-keys", dest="generate_keys", action="store_false",
                    help="Don't create API keys for teams that have none")
-    o = sub.add_parser("onboard-org", help="Parent project, team, OIDC mapping, ACL and notifications for one org")
+    o = sub.add_parser("onboard-org", help="Parent project and Teams notifications for the org")
     o.add_argument("org", help="GitHub org login, exactly as GitHub spells it")
-    o.add_argument("--teams-webhook", help="Teams incoming webhook URL for the org's channel")
-    sub.add_parser("sync-acl", help="Grant each org's team access to every project under its parent")
+    o.add_argument("--teams-webhook", help="Teams incoming webhook URL for the team's channel")
     args = ap.parse_args()
 
     dt = DependencyTrack(os.environ["DTRACK_URL"], os.environ["DTRACK_ADMIN_API_KEY"])
-    {"bootstrap": bootstrap, "onboard-org": onboard_org, "sync-acl": sync_acl}[args.cmd](dt, args)
+    {"bootstrap": bootstrap, "onboard-org": onboard_org}[args.cmd](dt, args)
 
 
 if __name__ == "__main__":

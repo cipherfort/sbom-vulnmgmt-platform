@@ -4,15 +4,17 @@ resource "azurerm_postgresql_flexible_server" "dtrack" {
   location            = data.azurerm_resource_group.this.location
   tags                = local.tags
 
-  sku_name   = "GP_Standard_D2ds_v5"
-  storage_mb = 65536
+  # Burstable is enough for one org's portfolio; move to GP_Standard_D2ds_v5
+  # if Dependency-Track's analysis queue starts lagging.
+  sku_name   = "B_Standard_B2s"
+  storage_mb = 32768
   version    = "16"
 
   administrator_login    = "dtrackadmin"
   administrator_password = random_password.postgres_admin.result
 
-  # Reached only through the private endpoint below.
-  public_network_access_enabled = false
+  # Public endpoint, limited by the firewall rule below.
+  public_network_access_enabled = true
 
   zone                         = "1"
   backup_retention_days        = 14
@@ -31,22 +33,13 @@ resource "azurerm_postgresql_flexible_server_database" "dtrack" {
   charset   = "UTF8"
 }
 
-resource "azurerm_private_endpoint" "postgres" {
-  name                = "pe-psql-dtrack-${local.env}"
-  resource_group_name = data.azurerm_resource_group.this.name
-  location            = data.azurerm_resource_group.this.location
-  subnet_id           = var.private_endpoint_subnet_id
-  tags                = local.tags
-
-  private_service_connection {
-    name                           = "postgres"
-    private_connection_resource_id = azurerm_postgresql_flexible_server.dtrack.id
-    subresource_names              = ["postgresqlServer"]
-    is_manual_connection           = false
-  }
-
-  private_dns_zone_group {
-    name                 = "default"
-    private_dns_zone_ids = [var.private_dns_zone_ids["postgres"]]
-  }
+# 0.0.0.0 is Azure's "allow Azure services" rule. Dependency-Track's outbound
+# IP isn't fixed without a VNet, so this is the only rule that lets it in.
+# It admits any Azure-hosted caller, so the 32-character password and TLS
+# (sslmode=require) are what protect the database.
+resource "azurerm_postgresql_flexible_server_firewall_rule" "allow_azure_services" {
+  name             = "AllowAzureServices"
+  server_id        = azurerm_postgresql_flexible_server.dtrack.id
+  start_ip_address = "0.0.0.0"
+  end_ip_address   = "0.0.0.0"
 }

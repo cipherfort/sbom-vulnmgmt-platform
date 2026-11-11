@@ -7,12 +7,7 @@
     "SBOM_STORAGE_ACCOUNT": "devstoreaccount1",
     "LOCAL_SECRETS_DIR": "../poc/secrets",
     "GITHUB_APP_ID": "<collector app id>",
-    "GITHUB_INSTALLER_APP_ID": "",
-    "GITHUB_INSTALLER_INSTALLATION_ID": "",
-    "GITHUB_ENTERPRISE": "<enterprise-slug>",
     "KEY_VAULT_URL": "",
-    "DTRACK_URL": "http://localhost:8081",
-    "DCE_ENDPOINT": "",
-    "DCR_IMMUTABLE_ID": ""
+    "DTRACK_URL": "http://localhost:8081"
   }
 }

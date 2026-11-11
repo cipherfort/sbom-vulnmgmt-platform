@@ -1,7 +1,18 @@
-"""Runbook steps 13-14 without a browser: change the default admin password,
-keep it in Key Vault, create a temporary Administrators API key, then run
-dtrack_admin.py bootstrap and onboard-org. Safe to re-run."""
+"""Deployment runbook step 12 without a browser: change Dependency-Track's
+default admin password, keep it in Key Vault, create a temporary
+Administrators API key, then run dtrack_admin.py bootstrap and onboard-org.
+Safe to re-run.
+
+  export DTRACK_URL=https://ca-dtrack-api.<env-domain>
+  export KV_URL=https://kv-sbom-prd.vault.azure.net/
+  export ORG=<the CPS GitHub org login>
+  export GITHUB_ADVISORIES_TOKEN=...   # optional, passed through to bootstrap
+  python ops/first_setup.py
+
+Runs as you (az login), so you need Key Vault Secrets Officer on the vault.
+"""
 import os
+import pathlib
 import secrets
 import subprocess
 import sys
@@ -13,7 +24,8 @@ from azure.keyvault.secrets import SecretClient
 
 API = os.environ["DTRACK_URL"].rstrip("/") + "/api/v1"
 KV_URL = os.environ["KV_URL"]
-ORG = os.environ["PILOT_ORG"]
+ORG = os.environ["ORG"]
+ADMIN = pathlib.Path(__file__).with_name("dtrack_admin.py")
 kv = SecretClient(KV_URL, DefaultAzureCredential())
 
 try:
@@ -44,4 +56,4 @@ print("Temporary Administrators API key created (delete it after Entra sign-in w
 
 env = dict(os.environ, DTRACK_ADMIN_API_KEY=key.json()["key"])
 for args in (["bootstrap", "--key-vault-url", KV_URL], ["onboard-org", ORG]):
-    subprocess.run([sys.executable, "ops/dtrack_admin.py", *args], env=env, check=True)
+    subprocess.run([sys.executable, str(ADMIN), *args], env=env, check=True)
