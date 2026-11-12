@@ -34,7 +34,7 @@ Nothing here needs a landing zone, a VNet or a jump box. Every command runs from
 
 ### Tools
 
-The Azure CLI (`az`), the GitHub CLI (`gh`), Terraform 1.11.x (`cd.yml` pins 1.11.4), Python 3.11, `git`, `jq`, `curl` and `perl`.
+The Azure CLI (`az`), the GitHub CLI (`gh`), Terraform 1.11.x (`cd.yml` pins 1.11.4), Python 3.11, `git`, `jq`, `curl`, `perl`, `rsync` and `zip`.
 
 ### Values to collect
 
@@ -322,6 +322,31 @@ If the plan fails because a name is taken (the Key Vault, storage accounts and P
 4. Run the plan again.
 
 **UI alternative:** Actions → *SBOM Platform CD* → Run workflow, choose `plan` or `apply`.
+
+**Without GitHub Actions: apply from your machine.** This is how the 11 Nov 2026 test deployment was done. You need Owner on `$RG` (or Contributor plus the conditioned RBAC Administrator from step 5) and Storage Blob Data Contributor on `$STATE_SA`. Steps 4 and 8's secrets and environment are then optional, but you still need `terraform.tfvars.json`.
+
+```bash
+source ~/sbom-deploy.env
+az login && az account set -s $SUB
+export ARM_SUBSCRIPTION_ID=$SUB
+terraform init
+terraform plan -var-file=terraform.tfvars.json -out=sbom.tfplan    # expect 38 to add, 0 to destroy
+terraform apply sbom.tfplan
+```
+
+Then deploy the collector code. That is `cd.yml`'s `collector-deploy` job. The dependencies must be Linux wheels for Python 3.11, so the `--platform` flags matter when you build on a Mac:
+
+```bash
+PKG=$(mktemp -d)
+rsync -a --exclude-from=sbom-collector/.funcignore --exclude=.funcignore --exclude=.python_packages sbom-collector/ $PKG/
+python3 -m pip install -q --target $PKG/.python_packages/lib/site-packages -r sbom-collector/requirements.txt \
+  --platform manylinux2014_x86_64 --platform manylinux_2_17_x86_64 --python-version 3.11 \
+  --implementation cp --only-binary=:all:
+(cd $PKG && zip -qr ../collector.zip .)
+az functionapp deployment source config-zip -g $RG -n $FUNC --src $PKG/../collector.zip
+```
+
+**Check:** Portal → `$FUNC` → Functions lists `enumerate_repos`, `collect_sbom` and `report_poison_depth`. Re-run both blocks after any change; keep the `.tfvars` file and state as for CI.
 
 ### Step 10 — Check the deployment and get the addresses
 
