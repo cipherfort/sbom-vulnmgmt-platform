@@ -9,7 +9,7 @@
 #   Variable: DEPENDENCY_TRACK_URL (the dependency_track_api_url output)
 #   Secret:   DEPENDENCY_TRACK_API_KEY (the ci-uploader team's key,
 #             Key Vault secret dtrack-ci-api-key)
-# Expect project "<org>/cps-security-platform-infra/terraform" under the
+# Expect project "<org>/<this repo>/terraform" under the
 # "<org>" parent project.
 
 name: Test SBOM Scan

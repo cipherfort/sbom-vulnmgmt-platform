@@ -67,11 +67,12 @@ source ~/sbom-deploy.env
 
 **Who:** platform engineer. **Where:** your machine, in a clone of the source repo.
 
-Three things in the code are specific to where this repo was built:
+Four things in the code are specific to where this repo was built:
 
 | What | Where | If left unchanged |
 |---|---|---|
 | Repo path `sg-cloud-platform/cps-security-platform-infra` | Workflow header comments | Harmless, but misleading |
+| Repo name `cps-security-platform-infra` | The `repo` tag in `main.tf`, a comment in `test-sbom-scan.yml` | Resources are tagged with the wrong repo |
 | Runner label `cps-ubuntu-latest-private` | `cd.yml`, `sbom-collector-ci.yml`, `sbom-scan.yml`, `image-scan.yml`, `container-sbom.yml`, `release-sbom-attest.yml`, `.github/actionlint.yaml` | Jobs queue forever if your org has no runner with that label |
 | State backend `rg-tfstate-security-platform` / `stsecplatstate001` | `versions.tf` | `terraform init` fails or writes to someone else's account |
 
@@ -85,6 +86,8 @@ git switch -c deploy/$ENV
 EXCLUDE=':!docs/deployment-runbook.md'
 git grep -l 'sg-cloud-platform/cps-security-platform-infra' -- . "$EXCLUDE" \
   | xargs perl -pi -e "s#sg-cloud-platform/cps-security-platform-infra#$GH_REPO#g"
+git grep -l 'cps-security-platform-infra' -- . "$EXCLUDE" \
+  | xargs perl -pi -e "s#cps-security-platform-infra#${GH_REPO#*/}#g"
 git grep -l 'cps-ubuntu-latest-private' -- . "$EXCLUDE" \
   | xargs perl -pi -e "s#cps-ubuntu-latest-private#$RUNNER#g"
 perl -pi -e "s#\"rg-tfstate-security-platform\"#\"$STATE_RG\"#; s#\"stsecplatstate001\"#\"$STATE_SA\"#" versions.tf
@@ -93,7 +96,7 @@ git diff --stat
 git commit -am "Configure for $GH_REPO"
 ```
 
-**Check:** `git grep -n -e stsecplatstate001 -e cps-ubuntu-latest-private -- . "$EXCLUDE"` prints nothing. If `$RUNNER` is `ubuntu-latest`, also remove that label from `.github/actionlint.yaml`.
+**Check:** `git grep -n -e stsecplatstate001 -e cps-ubuntu-latest-private -e cps-security-platform-infra -- . "$EXCLUDE"` prints nothing. If `$RUNNER` is a GitHub-hosted label such as `ubuntu-latest`, delete `.github/actionlint.yaml`, because actionlint already knows GitHub-hosted labels.
 
 ### Step 2 — Create the repo and push
 
@@ -229,7 +232,9 @@ scripts/github/security-config.sh --org $ORG
 
 This creates the org configuration `cps-sbom-baseline`. It turns on the dependency graph, automatic dependency submission and Dependabot alerts, and leaves paid features `not_set`. The script attaches it to every repo not already on another configuration, and makes it the default for new repos. It lists the existing configurations first. Add the same three settings to those configurations, or re-run with `--include-configured` to replace them.
 
-**Check:** in any repo, Insights → Dependency graph shows dependencies.
+The token needs `admin:org`. GitHub's docs say `write:org`, but the API refuses that with a 403. If the org has no Advanced Security plan, the script prints `No Advanced Security plan in <org>` and creates the configuration without the two paid settings. That is expected.
+
+**Check:** Org → Settings → Code security → Configurations shows `cps-sbom-baseline` on every repo. Attaching runs in the background, so allow a few minutes. Then, in any repo, Insights → Dependency graph shows dependencies.
 
 **UI alternative:** Org → Settings → Code security → Configurations → **New configuration**. Set Dependency graph, Automatic dependency submission and Dependabot alerts to Enabled, leave the rest Not set, then *Apply to* → All repositories, and *Use as default* for new repositories.
 
@@ -593,7 +598,17 @@ source ~/sbom-deploy.env
 terraform init && terraform destroy          # with the same tfvars, as the deployer or an Owner
 # Application Insights creates this action group itself, so Terraform doesn't remove it
 az monitor action-group delete -g $RG -n "Application Insights Smart Detection"
+# The resource group was created by hand in step 5
+az group delete -n $RG --yes
 ```
+
+Then remove what lives outside the resource group, if the platform is going for good:
+- **GitHub:**
+  - Uninstall and delete the `cps-sbom-collector` App.
+  - Detach `cps-sbom-baseline` (Org → Settings → Code security → Configurations). It does no harm left on.
+  - Delete the org's `DEPENDENCY_TRACK_URL` variable and `DEPENDENCY_TRACK_API_KEY` secret.
+- **Entra:** the deployer app from step 4, and the groups and Dependency-Track app registration from step 17.
+- **State:** the `sbom-platform.tfstate` blob, or the whole `$STATE_RG`.
 
 The Key Vault is soft-deleted with purge protection, so its name is reserved for 90 days. A redeploy with the same name recovers it automatically (`recover_soft_deleted_key_vaults`), with its old secrets:
 - **Its old firewall comes back too.** azurerm recovers the vault without applying `network_acls`. If the old vault had `Deny` (for example, one from the enterprise branch), the first apply fails at `ca-dtrack-api` with `unable to fetch secret 'db-password'`. The failed app is left in Azure but not in state, so delete it (`az containerapp delete -g $RG -n ca-dtrack-api --yes`) and apply again; that apply switches the vault to `Allow` and recreates the app.
@@ -614,3 +629,6 @@ The Key Vault is soft-deleted with purge protection, so its name is reserved for
 | Host keys fail with 400, or timers never fire | `AzureWebJobsStorage` set to a key-based string | It must be empty (`collector.tf` sets it so); check the Function's Environment variables |
 | `enumerate_repos` logs a 401 | Wrong or missing `github-app-private-key` | Re-store the key (step 11), then restart (step 13) |
 | Every repo is `no-dependency-graph` | `cps-sbom-baseline` not applied yet, or the App was installed on selected repositories | Step 7; set the installation to All repositories |
+| Some repos are `no-dependency-graph` right after step 7 | GitHub builds a repo's graph a few minutes after the configuration attaches | Run step 14 again; repos whose last status isn't `ok` are always queued again. Otherwise the nightly run picks them up |
+| `security-config.sh` gets a 403 saying it needs `admin:org` | The token has only `write:org` | `gh auth refresh -h github.com -s admin:org` |
+| `ca-dtrack-api` fails with `unable to fetch secret 'db-password'` | A recovered Key Vault kept an old `Deny` firewall | See [Tearing it down](#tearing-it-down): delete the failed app and apply again |

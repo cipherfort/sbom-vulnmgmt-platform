@@ -4,7 +4,11 @@ An Azure-hosted collector pulls GitHub's dependency-graph SBOM for every reposit
 - **OWASP Dependency-Track**, where CPS sees components, licences and vulnerabilities, triages findings, and searches for a package across every repo.
 - **Blob storage**, for 13 months of history.
 
-**Status: built on branch, not deployed in production.** The design was test-deployed end to end on 6 Nov 2026 in its enterprise form; this single-org version has passed `terraform test` and the collector tests but has not been applied yet.
+**Status: not deployed in production.** This version was test-deployed end to end on 11 Nov 2026 to a personal subscription and GitHub org, then destroyed:
+- **Worked:** the 38-resource apply; the UI limited to `allowed_ip_ranges` and the API refusing calls without a key; `first_setup.py` from a laptop; `security-config.sh` on all 9 repos; and all 9 repos collected into Dependency-Track under the org parent, with the component search working.
+- **Not yet exercised:** `cd.yml`, `sbom-scan.yml`, Entra sign-in, and vulnerability counts after the first full NVD/OSV download.
+
+The bugs the test found are fixed, and the [runbook](docs/deployment-runbook.md) covers them.
 
 | Read | For |
 |---|---|

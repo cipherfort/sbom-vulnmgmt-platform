@@ -44,7 +44,7 @@ GitHub already builds an SBOM for every repository from its dependency graph. It
 
 ### Facts that shaped the build
 
-These were found building and test-deploying the enterprise version. They still apply.
+These were found building and test-deploying the enterprise version (6 Nov 2026) and this version (11 Nov 2026).
 
 - **Rate limit.** `generate-report` has its own `dependency_sbom` bucket: 100 an hour per App installation, measured 1 Nov 2026. The general 15,000 an hour doesn't apply.
   - The collector parks throttled jobs until the limit resets.
@@ -57,6 +57,9 @@ These were found building and test-deploying the enterprise version. They still 
 - **azurerm quirks** seen in the test deployment:
   - `azurerm_function_app_flex_consumption` writes an `AzureWebJobsStorage` connection string with an empty key. That overrides the identity settings, so the collector sets it to empty. See `collector.tf`.
   - `azurerm_storage_table` uses the data plane, so the table is created with azapi.
+  - A Key Vault recovered from soft delete keeps its old firewall, because azurerm doesn't apply `network_acls` on recovery. `keyvault.tf` sets the firewall explicitly, so the next apply corrects it.
+- **The org security configuration API needs `admin:org`**, not the `write:org` the docs give. Orgs without the unbundled Advanced Security plan reject the `code_security` and `secret_protection` fields, even as `not_set`. `security-config.sh` handles both.
+- **The baseline matters.** Before `cps-sbom-baseline` was applied, 6 of the 9 test repos returned `no-dependency-graph`. After it was applied, all 9 were collected.
 - **Failure visibility.** There is no per-queue length metric. The poison-queue depth is logged every 15 minutes and alerted on. A second alert fires if enumeration hasn't succeeded in 26 hours.
 
 ## Considered alternatives
