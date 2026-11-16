@@ -259,7 +259,7 @@ jq . terraform.tfvars.json > /dev/null && echo valid
 cp terraform.tfvars.json ~/sbom-terraform.tfvars.json
 ```
 
-`allowed_ip_ranges` limits who can open the Dependency-Track UI. Use an empty list to allow everyone. [`terraform.tfvars.example`](../terraform.tfvars.example) explains every variable.
+`allowed_ip_ranges` limits who can open the Dependency-Track UI. Use your office or VPN egress address in CIDR form (`curl -4 ifconfig.me` from that network, plus `/32`), or an empty list to allow everyone. It doesn't restrict the API, which stays open and needs a key on every call. [`terraform.tfvars.example`](../terraform.tfvars.example) explains every variable.
 
 Optionally, validate locally. This needs no Azure access:
 
