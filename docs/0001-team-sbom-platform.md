@@ -1,7 +1,5 @@
 # ADR-0001: Collect GitHub's dependency-graph SBOMs into Dependency-Track
 
-**Status:** Proposed, 11 Nov 2026.
-
 ## Context
 
 The team needs to know what each of the org's repositories depends on, see the known vulnerabilities and licences in those dependencies, and answer "where do we use package X?" quickly during an incident.

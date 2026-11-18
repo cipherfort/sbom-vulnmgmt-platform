@@ -54,7 +54,6 @@ jobs:
 
       # Reports findings; never fails the job on them.
       - name: Trivy scan
-        # Pinned by SHA: trivy-action's tags were hijacked in March 2026 (CVE-2026-33634).
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: ${{ matrix.image }}

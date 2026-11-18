@@ -37,7 +37,7 @@ OSV_ECOSYSTEMS = ["npm", "PyPI", "Maven", "Go", "NuGet", "RubyGems", "crates.io"
                   "GitHub Actions", "SwiftURL"]
 RESTRICTED_LICENCES = ["AGPL-1.0-only", "AGPL-1.0-or-later", "AGPL-3.0-only", "AGPL-3.0-or-later", "SSPL-1.0"]
 
-# Starter policies, all warn/info for the first 3 months.
+# Starter policies: warnings only.
 POLICIES = [
     {"name": "Critical or high vulnerability", "violationState": "WARN",
      "conditions": [{"subject": "SEVERITY", "operator": "IS", "value": "CRITICAL"},

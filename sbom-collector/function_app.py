@@ -182,7 +182,7 @@ def _collect(job):
     dl = requests.get(r.headers["Location"], timeout=120)
     dl.raise_for_status()
     body = dl.json()
-    spdx = body.get("sbom", body)  # GitHub returns bare SPDX today; tolerate the wrapped form too
+    spdx = body.get("sbom", body)  # bare or wrapped SPDX
 
     # Step C: archive, convert, load
     _blobs().upload_blob(f"{org}/{repo}/{dt.date.today().isoformat()}.spdx.json", json.dumps(spdx), overwrite=True)
