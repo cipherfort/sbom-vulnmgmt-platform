@@ -33,7 +33,7 @@ Everything runs in one resource group, `rg-sbom-<env>`, in UK South. The Azure s
 
 - [Deployment runbook](docs/deployment-runbook.md): deploying from scratch.
 - [How to use](docs/how-to-use.md): finding packages and vulnerabilities, running the collector, rotating credentials, troubleshooting.
-- [ADR-0001](docs/0001-team-sbom-platform.md): why it's built this way.
+- [Design decisions](docs/design-decisions.md): why it's built this way.
 
 ## Development
 

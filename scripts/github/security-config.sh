@@ -32,7 +32,7 @@ ID=$(api --paginate "/orgs/$ORG/code-security/configurations" --jq ".[] | select
 if [[ -z "$ID" ]]; then
   body='{
   "name": "'"$NAME"'",
-  "description": "CPS SBOM platform: every repo has a dependency graph (docs/0001-team-sbom-platform.md).",
+  "description": "CPS SBOM platform: every repo has a dependency graph (docs/design-decisions.md).",
   "dependency_graph": "enabled",
   "dependency_graph_autosubmit_action": "enabled",
   "dependabot_alerts": "enabled",

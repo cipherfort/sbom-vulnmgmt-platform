@@ -1,4 +1,4 @@
-# ADR-0001: Collect GitHub's dependency-graph SBOMs into Dependency-Track
+# Design decisions
 
 ## Context
 
