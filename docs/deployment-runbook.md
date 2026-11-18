@@ -4,23 +4,27 @@ This takes you from an empty subscription to nightly collection, deploying throu
 
 ## What you need
 
-- **Azure:** Owner on the subscription, to create the resource group and grant roles.
+- **Azure:** Owner on the subscription, and permission to create Entra app registrations.
 - **GitHub:** an owner of the org, and admin rights on this repo.
 - **Tools:** `az`, `gh` and `jq`. Deploying by hand also needs Terraform 1.11 or later, Python 3.11, `rsync` and `zip`.
 
-Save these values in a file outside the repo, and run `source ~/sbom.env` in each new terminal:
+Run every command from the root of this repo. First, save your values in a file outside the repo. Replace each `<...>`; the last two come from step 3, so fill those in then. Run `source ~/sbom.env` in each new terminal.
 
 ```bash
 cat > ~/sbom.env <<'EOF'
-export SUB=<subscription id>
-export TENANT=<Entra tenant id>
-export ENV=prd                       # names become rg-sbom-prd, kv-sbom-prd, ...
+export SUB="<subscription id>"
+export TENANT="<Entra tenant id>"
+export ENV=prd                                  # names become rg-sbom-prd, kv-sbom-prd, ...
 export RG=rg-sbom-$ENV
-export KV=kv-sbom-$ENV              # add your global_name_suffix here if you set one
-export STATE_RG=<state storage resource group>
-export STATE_SA=<state storage account>
-export GH_REPO=<org>/<this repo>
-export ORG=<GitHub org to collect>
+export KV=kv-sbom-$ENV                          # add your global_name_suffix here if you set one
+export STATE_RG="<state storage resource group>"
+export STATE_SA="<state storage account>"
+export GH_REPO="<org>/<this repo>"
+export ORG="<GitHub org to collect>"
+export ALERT_EMAIL="<team mailbox for alerts>"
+export ALLOWED_IP="<office or VPN egress IP>/32"  # who can open the UI
+export GITHUB_APP_ID="<App ID, from step 3>"
+export APP_KEY_PEM="<path to the App's .pem, from step 3>"
 EOF
 source ~/sbom.env
 ```
@@ -91,7 +95,7 @@ The six roles are Key Vault Administrator, Key Vault Secrets User, Storage Blob 
 - Repository permissions: **Contents: read** and **Metadata: read**. Nothing else.
 - Installable on **this account only**.
 
-Then note the **App ID**, generate a **private key**, and install the App on the org with **All repositories**.
+Then generate a **private key**, and install the App on the org with **All repositories**. Put the App ID and the downloaded key's path in `~/sbom.env`, and run `source ~/sbom.env` again.
 
 **Turn on the dependency graph** for every repo:
 
@@ -106,23 +110,24 @@ scripts/github/security-config.sh --org $ORG
 cat > ~/sbom.tfvars.json <<JSON
 {
   "environment": "$ENV",
-  "github_app_id": "<App ID>",
-  "alert_email": "<team mailbox>",
-  "allowed_ip_ranges": ["<office or VPN egress IP>/32"]
+  "github_app_id": "$GITHUB_APP_ID",
+  "alert_email": "$ALERT_EMAIL",
+  "allowed_ip_ranges": ["$ALLOWED_IP"]
 }
 JSON
 gh secret set TF_VARS_JSON              -R $GH_REPO < ~/sbom.tfvars.json
 gh secret set AZURE_CLIENT_ID           -R $GH_REPO --body $APP
 gh secret set AZURE_TENANT_ID           -R $GH_REPO --body $TENANT
 gh secret set AZURE_SUBSCRIPTION_ID     -R $GH_REPO --body $SUB
-gh secret set COLLECTOR_APP_PRIVATE_KEY -R $GH_REPO < <downloaded>.private-key.pem
-rm <downloaded>.private-key.pem
+gh secret set COLLECTOR_APP_PRIVATE_KEY -R $GH_REPO < "$APP_KEY_PEM"
 
 gh api -X PUT repos/$GH_REPO/branches/main/protection --input - <<'JSON'
 {"required_status_checks": null, "enforce_admins": true,
  "required_pull_request_reviews": {"required_approving_review_count": 1}, "restrictions": null}
 JSON
 ```
+
+Then delete the `.pem` file. The GitHub secret is the copy the pipeline uses.
 
 Two more settings are optional:
 - **`DT_ADVISORIES_TOKEN` secret:** a read-only GitHub token. It turns on the GitHub Advisories vulnerability source.
@@ -162,11 +167,14 @@ Repos should show `ok`. GitHub allows 100 SBOMs an hour, so an org with more rep
 
 ## 5. Give people access
 
-Reading the admin password needs a Key Vault role. Grant it to a group rather than to individuals:
+Reading the admin password needs a Key Vault role. Grant it to an Entra group of platform admins rather than to individuals:
 
 ```bash
-az role assignment create --assignee-object-id <admins group object id> --assignee-principal-type Group \
-  --role "Key Vault Secrets Officer" --scope $(az keyvault show -n $KV --query id -o tsv)
+ADMINS_GROUP="<name of your platform admins group>"
+az role assignment create --assignee-object-id "$(az ad group show -g "$ADMINS_GROUP" --query id -o tsv)" \
+  --assignee-principal-type Group --role "Key Vault Secrets Officer" --scope "$(az keyvault show -n $KV --query id -o tsv)"
+
+# A few minutes later, as a member of that group:
 az keyvault secret show --vault-name $KV -n dtrack-admin-password --query value -o tsv
 ```
 
@@ -203,10 +211,15 @@ for g in sg-sbom-cps-admins sg-sbom-cps-users; do
 done
 ```
 
-1. Add `"dtrack_oidc_client_id": "<DT_APP>"` to `~/sbom.tfvars.json`.
-2. Update the `TF_VARS_JSON` secret from it, and run `cd.yml` with `apply` again.
-3. Add people to the two groups.
-4. Once Entra sign-in works, suspend the local `admin` account: Managed Users → `admin` → Suspended.
+Then tell Terraform about the app, and apply:
+
+```bash
+jq --arg id "$DT_APP" '.dtrack_oidc_client_id = $id' ~/sbom.tfvars.json > ~/sbom.tfvars.tmp && mv ~/sbom.tfvars.tmp ~/sbom.tfvars.json
+gh secret set TF_VARS_JSON -R $GH_REPO < ~/sbom.tfvars.json
+gh workflow run cd.yml -R $GH_REPO --ref main -f action=apply
+```
+
+Add people to the two groups. Once Entra sign-in works, suspend the local `admin` account: Managed Users → `admin` → Suspended.
 
 Terraform can create the groups and app itself (`"manage_entra": true`), but the deployer then needs Microsoft Graph application permissions. Most tenants won't allow that on a pipeline identity.
 
@@ -219,6 +232,8 @@ gh variable set DEPENDENCY_TRACK_URL --org $ORG --visibility all \
   --body "https://$(az containerapp show -g $RG -n ca-dtrack-api --query properties.configuration.ingress.fqdn -o tsv)"
 az keyvault secret show --vault-name $KV -n dtrack-ci-api-key --query value -o tsv \
   | gh secret set DEPENDENCY_TRACK_API_KEY --org $ORG --visibility all
+
+# Only if this repo is private or internal: let the org's other repos call its workflows
 gh api -X PUT repos/$GH_REPO/actions/permissions/access -f access_level=organization
 ```
 
@@ -241,25 +256,31 @@ python3 -m pip install -q --target $PKG/.python_packages/lib/site-packages -r sb
 az functionapp deployment source config-zip -g $RG -n $FUNC --src $PKG/../collector.zip
 az functionapp function list -g $RG -n $FUNC --query "[].name" -o tsv     # expect three functions
 
-# The same work as sbom-setup.yml
-az keyvault secret set --vault-name $KV -n github-app-private-key --file <downloaded>.private-key.pem -o none
+# The same work as sbom-setup.yml. If Key Vault says Forbidden, wait a few minutes for your new role.
+az keyvault secret set --vault-name $KV -n github-app-private-key --file "$APP_KEY_PEM" -o none
+DT_API=$(terraform output -raw dependency_track_api_url)
+until curl -fs $DT_API/api/version; do sleep 15; done                     # first start takes a few minutes
 python3.11 -m venv .venv && .venv/bin/pip install -q -r sbom-collector/requirements.txt
-DTRACK_URL=$(terraform output -raw dependency_track_api_url) KV_URL=https://$KV.vault.azure.net/ ORG=$ORG \
-  .venv/bin/python sbom-collector/ops/first_setup.py
+DTRACK_URL=$DT_API KV_URL=https://$KV.vault.azure.net/ ORG=$ORG .venv/bin/python sbom-collector/ops/first_setup.py
 az functionapp restart -g $RG -n $FUNC
 az containerapp revision restart -g $RG -n ca-dtrack-api \
   --revision $(az containerapp revision list -g $RG -n ca-dtrack-api --query "[?properties.active].name | [0]" -o tsv)
-curl -X POST "https://$(az functionapp show -g $RG -n $FUNC --query properties.defaultHostName -o tsv)/admin/functions/enumerate_repos" \
+sleep 60
+curl -s -o /dev/null -w '%{http_code}\n' -X POST \
+  "https://$(az functionapp show -g $RG -n $FUNC --query properties.defaultHostName -o tsv)/admin/functions/enumerate_repos" \
   -H "x-functions-key: $(az functionapp keys list -g $RG -n $FUNC --query masterKey -o tsv)" \
-  -H 'Content-Type: application/json' -d '{}'
+  -H 'Content-Type: application/json' -d '{}'                             # expect 202
 ```
+
+Then delete the `.pem` file, and check the results as in step 4.
 
 Applying by hand makes you Key Vault Administrator. If the pipeline applies later, that role moves to the pipeline identity.
 
 ## Tearing it down
 
 ```bash
-terraform destroy -var-file=$HOME/sbom.tfvars.json
+source ~/sbom.env && export ARM_SUBSCRIPTION_ID=$SUB
+terraform init && terraform destroy -var-file=$HOME/sbom.tfvars.json
 az monitor action-group delete -g $RG -n "Application Insights Smart Detection"   # created by Azure, not Terraform
 az group delete -n $RG --yes
 ```
