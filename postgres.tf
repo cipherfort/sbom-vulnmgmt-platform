@@ -4,7 +4,7 @@ resource "azurerm_postgresql_flexible_server" "dtrack" {
   location            = data.azurerm_resource_group.this.location
   tags                = local.tags
 
-  sku_name   = "B_Standard_B2s"
+  sku_name   = var.postgres_sku
   storage_mb = 32768
   version    = "16"
 

@@ -73,6 +73,7 @@ The API is reachable from the internet, so rotate an API key straight away if it
 | Workflow jobs stay *Queued* | No runner with the label in the workflows | Use a label your org has (runbook step 1) |
 | `AADSTS700213` at Azure login | The run wasn't from `main`, or the federated credential doesn't match | Run from `main`; the subject must be `repo:<org>/<repo>:ref:refs/heads/main` |
 | `AuthorizationFailed` creating a role assignment | The deployer's RBAC Administrator role is missing | Runbook step 2 |
+| Apply fails at Postgres with `SkuNotAvailable` | Azure has no capacity for that size in the region right now | Set `postgres_sku` to `B_Standard_B2ms` or `GP_Standard_D2ds_v5`, or try again later. First wait until `az postgres flexible-server list -g $RG` is empty, because the failed server takes a few minutes to go |
 | Plan fails because a name is taken | Key Vault, storage, Postgres and Function names are global | Set `global_name_suffix` |
 | The Function lists no functions; the org project has no repos | The code wasn't deployed, or was built with the wrong wheels | Run `cd.yml` with `apply`. A `ModuleNotFoundError` in Application Insights means the wrong wheels. |
 | The UI returns 403 | Your IP isn't in `allowed_ip_ranges` | Add it to `TF_VARS_JSON` and apply |

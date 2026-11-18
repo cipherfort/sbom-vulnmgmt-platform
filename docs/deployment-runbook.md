@@ -1,11 +1,11 @@
 # Deployment runbook
 
-This takes you from an empty subscription to nightly collection, deploying through GitHub Actions. Running it from your own machine is covered in [Deploying without the pipeline](#deploying-without-the-pipeline). If something goes wrong, see [Troubleshooting](how-to-use.md#troubleshooting).
+This takes you from an empty subscription to nightly collection, deploying through GitHub Actions. Allow about two hours, most of it waiting. The platform costs roughly £10 a day to run, mostly Dependency-Track and Postgres. Running it from your own machine is covered in [Deploying without the pipeline](#deploying-without-the-pipeline). If something goes wrong, see [Troubleshooting](how-to-use.md#troubleshooting).
 
 ## What you need
 
 - **Azure:** Owner on the subscription, and permission to create Entra app registrations.
-- **GitHub:** an owner of the org, and admin rights on this repo.
+- **GitHub:** an owner of the org, and admin rights on this repo. Protecting `main` on a private repo needs GitHub Team or Enterprise.
 - **Tools:** `az`, `gh` and `jq`. Deploying by hand also needs Terraform 1.11 or later, Python 3.11, `rsync` and `zip`.
 
 Run every command from the root of this repo. First, save your values in a file outside the repo. Replace each `<...>`; the last two come from step 3, so fill those in then. Run `source ~/sbom.env` in each new terminal.
@@ -44,7 +44,7 @@ git grep -l cps-ubuntu-latest-private -- .github | xargs perl -pi -e 's/cps-ubun
 git rm .github/actionlint.yaml
 ```
 
-Commit and push to `main`.
+Commit and push to `main`. The push starts `cd.yml`, which fails at Azure login because the secrets don't exist yet. That's expected and changes nothing.
 
 ## 2. Azure: state, resource group and deployer
 
@@ -127,26 +127,35 @@ gh api -X PUT repos/$GH_REPO/branches/main/protection --input - <<'JSON'
 JSON
 ```
 
+If the last command returns 403, your GitHub plan doesn't support branch protection on this repo. Agree with the team that changes reach `main` only through reviewed pull requests.
+
 Then delete the `.pem` file. The GitHub secret is the copy the pipeline uses.
 
 Two more settings are optional:
-- **`DT_ADVISORIES_TOKEN` secret:** a read-only GitHub token. It turns on the GitHub Advisories vulnerability source.
-- **`SBOM_ORG` variable:** set it if the org to collect isn't the org this repo is in.
+
+```bash
+# A read-only GitHub token (a fine-grained token with no permissions is enough).
+# Adds GitHub Advisories as a vulnerability source.
+read -rs T && gh secret set DT_ADVISORIES_TOKEN -R $GH_REPO --body "$T" && unset T
+
+# Only if the org to collect isn't the org this repo is in
+gh variable set SBOM_ORG -R $GH_REPO --body $ORG
+```
 
 ## 4. Deploy
 
 ```bash
 gh workflow run cd.yml -R $GH_REPO --ref main -f action=apply
-sleep 10; gh run watch -R $GH_REPO $(gh run list -R $GH_REPO -w cd.yml -L 1 --json databaseId -q '.[0].databaseId')
+sleep 10; gh run watch -R $GH_REPO $(gh run list -R $GH_REPO -w cd.yml -e workflow_dispatch -L 1 --json databaseId -q '.[0].databaseId')
 ```
 
-This creates the platform, which is 38 resources and takes 20–40 minutes, and then deploys the collector code. The run fails if the Function doesn't load its three functions.
+This creates the platform, which is 38 resources and takes 20–40 minutes, and then deploys the collector code. The run fails if the Function doesn't load its three functions. If it fails at Postgres with `SkuNotAvailable`, see [Troubleshooting](how-to-use.md#troubleshooting).
 
 Then run the one-off setup:
 
 ```bash
 gh workflow run sbom-setup.yml -R $GH_REPO --ref main
-sleep 10; gh run watch -R $GH_REPO $(gh run list -R $GH_REPO -w sbom-setup.yml -L 1 --json databaseId -q '.[0].databaseId')
+sleep 10; gh run watch -R $GH_REPO $(gh run list -R $GH_REPO -w sbom-setup.yml -e workflow_dispatch -L 1 --json databaseId -q '.[0].databaseId')
 ```
 
 This run:

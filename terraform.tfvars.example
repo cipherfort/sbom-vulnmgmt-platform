@@ -12,6 +12,7 @@ allowed_ip_ranges = ["203.0.113.10/32"]
 # environment           = "prd"    # names become rg-sbom-prd, kv-sbom-prd, ...
 # global_name_suffix    = ""       # only if a globally unique name is taken
 # dtrack_image_tag      = "4.14.6"
+# postgres_sku          = "B_Standard_B2s" # if Azure has no capacity: "B_Standard_B2ms" or "GP_Standard_D2ds_v5"
 # dtrack_oidc_client_id = ""       # Entra sign-in, once the app registration exists
 # manage_entra          = false    # true: Terraform creates the Entra groups and app
 

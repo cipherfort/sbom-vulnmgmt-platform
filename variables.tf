@@ -26,6 +26,12 @@ variable "github_app_id" {
   type        = string
 }
 
+variable "postgres_sku" {
+  description = "Postgres size. Change it if Azure has no capacity for the default (SkuNotAvailable)."
+  type        = string
+  default     = "B_Standard_B2s"
+}
+
 variable "dtrack_image_tag" {
   description = "Dependency-Track version (4.13.0 or later)"
   type        = string
