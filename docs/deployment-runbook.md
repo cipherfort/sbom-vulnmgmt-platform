@@ -158,18 +158,20 @@ DEPLOYER_APP_ID=$(az ad app create --display-name sp-sbom-platform-github-action
 DEPLOYER_SP=$(az ad sp create --id $DEPLOYER_APP_ID --query id -o tsv)
 
 az ad app federated-credential create --id $DEPLOYER_APP_ID --parameters "{
-  \"name\": \"sbom-cd-security-platform\",
+  \"name\": \"sbom-cd-main\",
   \"issuer\": \"https://token.actions.githubusercontent.com\",
-  \"subject\": \"repo:$GH_REPO:environment:security-platform\",
+  \"subject\": \"repo:$GH_REPO:ref:refs/heads/main\",
   \"audiences\": [\"api://AzureADTokenExchange\"]
 }"
 
 echo "export DEPLOYER_APP_ID=$DEPLOYER_APP_ID DEPLOYER_SP=$DEPLOYER_SP" >> ~/sbom-deploy.env
 ```
 
-The subject names the **environment**, not the branch. Both `cd.yml` jobs run in the `security-platform` environment, and GitHub then issues `repo:<org>/<repo>:environment:security-platform` as the token subject. A `ref:refs/heads/main` credential would never match. Branch control comes from the environment's reviewers (step 8) and from protecting `main`.
+The subject names the **`main` branch**. The workflows use no GitHub environment, so GitHub issues `repo:<org>/<repo>:ref:refs/heads/main` for pushes to `main` and for *Run workflow* from `main`. A run from any other branch gets a different subject and fails at Azure login, so it can't deploy. There's no approval step: whatever reaches `main` is applied. Protect `main` in step 8 so changes need a reviewed pull request.
 
-**UI alternative:** Entra ID → App registrations → New registration. Then Certificates & secrets → Federated credentials → Add → *GitHub Actions deploying Azure resources*, entity type **Environment**, name `security-platform`.
+If you later add a GitHub environment to the jobs, the subject becomes `repo:<org>/<repo>:environment:<name>`, and this credential has to change to match.
+
+**UI alternative:** Entra ID → App registrations → New registration. Then Certificates & secrets → Federated credentials → Add → *GitHub Actions deploying Azure resources*, entity type **Branch**, branch `main`.
 
 ### Step 5 — Resource group and deployer roles
 
@@ -282,9 +284,11 @@ read -rs T && gh secret set DT_ADVISORIES_TOKEN -R $GH_REPO --body "$T" && unset
 # Only if the org to collect isn't the org this repo is in:
 # gh variable set SBOM_ORG -R $GH_REPO --body $ORG
 
-# Required reviewers for every apply. For a team, use {"type": "Team", "id": <team id>}.
-gh api -X PUT repos/$GH_REPO/environments/security-platform --input - <<JSON
-{"reviewers": [{"type": "User", "id": $(gh api users/<reviewer-login> --jq .id)}]}
+# main applies on every push, so changes must arrive by reviewed pull request
+gh api -X PUT repos/$GH_REPO/branches/main/protection --input - <<'JSON'
+{"required_status_checks": null, "enforce_admins": true,
+ "required_pull_request_reviews": {"required_approving_review_count": 1},
+ "restrictions": null}
 JSON
 ```
 
@@ -292,7 +296,7 @@ Now delete the `.pem`, including any copy in Downloads. The GitHub secret is the
 
 **Check:** `gh secret list -R $GH_REPO` shows `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `TF_VARS_JSON` and `COLLECTOR_APP_PRIVATE_KEY`, plus `DT_ADVISORIES_TOKEN` if you set it.
 
-**UI alternative:** the repo → Settings → Secrets and variables → Actions for the secrets (paste the whole `.pem`, BEGIN and END lines included); Settings → Environments → New environment `security-platform` → Required reviewers, and under *Deployment branches* allow only `main`.
+**UI alternative:** the repo → Settings → Secrets and variables → Actions for the secrets (paste the whole `.pem`, BEGIN and END lines included); Settings → Branches (or Rules → Rulesets) → protect `main` with *Require a pull request before merging* and one approval.
 
 ---
 
@@ -300,13 +304,12 @@ Now delete the `.pem`, including any copy in Downloads. The GitHub secret is the
 
 ### Step 9 — Plan, then apply
 
-**Who:** platform engineer, plus an environment reviewer. **Where:** your machine (the runner does the work).
+**Who:** platform engineer. **Where:** your machine (the runner does the work).
 
 ```bash
 source ~/sbom-deploy.env
-gh workflow run cd.yml -R $GH_REPO -f action=plan
+gh workflow run cd.yml -R $GH_REPO --ref main -f action=plan
 sleep 10; RUN=$(gh run list -R $GH_REPO -w cd.yml -L 1 --json databaseId -q '.[0].databaseId')
-# A reviewer approves the run: Actions → the run → Review deployments
 gh run watch $RUN -R $GH_REPO
 gh run view $RUN -R $GH_REPO --log | grep -E 'Plan:|Error'
 ```
@@ -314,14 +317,14 @@ gh run view $RUN -R $GH_REPO --log | grep -E 'Plan:|Error'
 Read the plan. It should create 38 resources and destroy nothing. Then apply:
 
 ```bash
-gh workflow run cd.yml -R $GH_REPO -f action=apply
+gh workflow run cd.yml -R $GH_REPO --ref main -f action=apply
 sleep 10; RUN=$(gh run list -R $GH_REPO -w cd.yml -L 1 --json databaseId -q '.[0].databaseId')
 gh run watch $RUN -R $GH_REPO
 ```
 
-The run asks for approval twice: once for `terraform`, once for `collector-deploy`. Postgres and the Container Apps environment are the slow parts, so allow 20–40 minutes.
+The run applies without asking. Postgres and the Container Apps environment are the slow parts, so allow 20–40 minutes.
 
-`collector-deploy` builds the collector package, uploads it, and then checks that the Function lists its three functions. If it doesn't, the job fails rather than leaving an empty Function App. After the first apply, pushes to `main` that change `*.tf`, the lock file or `sbom-collector/` run plan and apply by themselves, still after a reviewer approves. Documentation changes don't trigger a run.
+`collector-deploy` builds the collector package, uploads it, and then checks that the Function lists its three functions. If it doesn't, the job fails rather than leaving an empty Function App. After the first apply, merges to `main` that change `*.tf`, the lock file or `sbom-collector/` run plan and apply by themselves. Documentation changes don't trigger a run. The pull request review before the merge is the approval.
 
 If the plan fails because a name is taken (the Key Vault, storage accounts and Postgres server need globally unique names):
 1. Set `SFX` in `~/sbom-deploy.env`.
@@ -385,9 +388,9 @@ az functionapp show -g $RG -n $FUNC --query "{state:properties.state, host:prope
 
 **Who:** subscription Owner grants the role; platform engineer stores the key. **Where:** anywhere with `az`.
 
-> **With the pipeline, steps 11–14 are one workflow run.** Grant the role below; people need it to read the admin password later. Then run **SBOM Platform Setup** ([`sbom-setup.yml`](../.github/workflows/sbom-setup.yml)), and a reviewer approves it:
+> **With the pipeline, steps 11–14 are one workflow run.** Grant the role below; people need it to read the admin password later. Then run **SBOM Platform Setup** ([`sbom-setup.yml`](../.github/workflows/sbom-setup.yml)) from `main`:
 > ```bash
-> gh workflow run sbom-setup.yml -R $GH_REPO
+> gh workflow run sbom-setup.yml -R $GH_REPO --ref main
 > sleep 10; gh run watch $(gh run list -R $GH_REPO -w sbom-setup.yml -L 1 --json databaseId -q '.[0].databaseId') -R $GH_REPO
 > ```
 > It stores `COLLECTOR_APP_PRIVATE_KEY` in Key Vault, waits for Dependency-Track, runs `first_setup.py` (step 12), restarts both apps (step 13) and starts the first collection (step 14). It runs as the deployer, which Terraform makes Key Vault Administrator, and prints no key or password. Then go to step 14's **Check**. The commands below are the same work by hand.
@@ -626,7 +629,7 @@ Put the platform admins in `sg-sbom-cps-admins`, and everyone else on the team w
 
 ## After go-live
 
-- **Changing the platform:** open a pull request, merge it to `main`, and `cd.yml` runs plan and apply after a reviewer approves. Collector code changes deploy in the same run. Keep `~/sbom-terraform.tfvars.json` as the source for `TF_VARS_JSON`.
+- **Changing the platform:** open a pull request, merge it to `main` after review, and `cd.yml` runs plan and apply. Collector code changes deploy in the same run. Keep `~/sbom-terraform.tfvars.json` as the source for `TF_VARS_JSON`.
 - **Day to day:** [how-to-use](how-to-use.md) covers using Dependency-Track, rotating credentials (§7) and the failure runbook (§8).
 - **The old stack:** if the DefectDojo platform from `main` (`rg-security-platform`) was ever deployed, delete that resource group and its `security-platform.tfstate` state blob once this platform is in use.
 
@@ -658,7 +661,7 @@ The Key Vault is soft-deleted with purge protection, so its name is reserved for
 | Symptom | Cause | Fix |
 |---|---|---|
 | `cd.yml` jobs stay *Queued* | No runner with the `$RUNNER` label | Check the label from step 1 matches a runner available to the repo |
-| `AADSTS700213` / `AADSTS70021` at Azure login | The federated credential subject doesn't match | It must be `repo:<org>/<repo>:environment:security-platform`, matching `$GH_REPO` exactly (step 4) |
+| `AADSTS700213` / `AADSTS70021` at Azure login | The federated credential subject doesn't match | It must be `repo:<org>/<repo>:ref:refs/heads/main`, matching `$GH_REPO` exactly (step 4). Runs from any other branch always fail here, by design |
 | `AuthorizationFailed` creating a role assignment | RBAC Administrator role or its condition missing | Re-run step 5 |
 | Plan fails: the storage account, Key Vault or Postgres name is taken | Globally unique names | Set `global_name_suffix` (step 9) |
 | The Function App lists no functions (`collector-deploy` fails at *Check the functions loaded*, or Projects shows only the org) | Code never deployed, or built with Mac or Windows wheels | Re-run `cd.yml` with `apply`, or the manual build in step 9 with its `--platform` flags. A `ModuleNotFoundError` in Application Insights confirms the wrong wheels |

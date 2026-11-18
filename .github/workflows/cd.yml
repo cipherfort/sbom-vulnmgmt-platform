@@ -1,11 +1,13 @@
 name: SBOM Platform CD
 
-# Terraform plan/apply, then the collector code. Pushes to main apply after an
-# environment reviewer approves; Actions > Run workflow runs a plan or apply
-# by hand (use that after changing the TF_VARS_JSON secret). First-time
-# Dependency-Track setup is sbom-setup.yml, run once after the first apply.
-# Every job runs in the security-platform environment, which the deployer's
-# federated credential subject names (deployment runbook step 4).
+# Terraform plan/apply, then the collector code. Pushes to main apply
+# straight away, so protect main with required pull request reviews;
+# Actions > Run workflow runs a plan or apply by hand (use that after
+# changing the TF_VARS_JSON secret). First-time Dependency-Track setup is
+# sbom-setup.yml, run once after the first apply.
+# There is no GitHub environment: the deployer's federated credential trusts
+# repo:<org>/<repo>:ref:refs/heads/main, so only runs from main can sign in to
+# Azure (deployment runbook step 4).
 
 on:
   push:
@@ -44,9 +46,6 @@ jobs:
     concurrency:
       group: security-platform
       cancel-in-progress: false
-
-    environment:
-      name: security-platform
 
     outputs:
       resource_group: ${{ steps.names.outputs.resource_group }}
@@ -115,9 +114,6 @@ jobs:
     concurrency:
       group: sbom-collector
       cancel-in-progress: false
-
-    environment:
-      name: security-platform
 
     env:
       RG: ${{ needs.terraform.outputs.resource_group }}

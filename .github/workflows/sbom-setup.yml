@@ -14,6 +14,9 @@ name: SBOM Platform Setup
 #            COLLECTOR_APP_PRIVATE_KEY  the App's .pem; optional once it's in Key Vault
 #            DT_ADVISORIES_TOKEN        optional read-only token for the GitHub Advisories mirror
 # Variable:  SBOM_ORG                   optional; defaults to this repo's org
+#
+# Run it from main: the deployer's federated credential only trusts main, as
+# for cd.yml.
 
 on:
   workflow_dispatch:
@@ -50,9 +53,6 @@ jobs:
     concurrency:
       group: security-platform
       cancel-in-progress: false
-
-    environment:
-      name: security-platform
 
     steps:
       - uses: actions/checkout@v4

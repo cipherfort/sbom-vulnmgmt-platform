@@ -62,7 +62,7 @@ Every Azure hop uses a managed identity or Entra ID. The only long-lived secrets
 Follow the [deployment runbook](docs/deployment-runbook.md). It needs no landing zone: a subscription, a resource group, and an org owner on GitHub. Every step has its commands and a check.
 
 Two things catch people out:
-- **The deployer's federated credential subject is `repo:<org>/<repo>:environment:security-platform`, not a branch ref.** Both `cd.yml` jobs run in that environment, and GitHub then puts the environment in the token subject.
+- **The pipeline deploys only from `main`, with no approval step.** The deployer's federated credential subject is `repo:<org>/<repo>:ref:refs/heads/main`, so runs from other branches can't sign in to Azure. Whatever merges to `main` is applied, so protect `main` with required reviews (runbook step 8).
 - **The deployer needs more than Contributor.** It also needs Role Based Access Control Administrator, conditioned, on `rg-sbom-<env>`. See runbook step 5.
 
 ## Known gaps
