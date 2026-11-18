@@ -3,23 +3,15 @@ terraform {
 
   required_providers {
     azurerm = {
-      source = "hashicorp/azurerm"
-      # 4.x line. azurerm_function_app_flex_consumption and the
-      # storage_account_id (management-plane) form of storage containers and
-      # queues need a recent 4.x — they let the deployer create them without
-      # a storage data-plane role.
+      source  = "hashicorp/azurerm"
       version = "~> 4.60"
     }
     azapi = {
-      source = "Azure/azapi"
-      # The repostate table over ARM: azurerm_storage_table uses the data
-      # plane, which would need a storage data role on the deployer.
+      source  = "Azure/azapi"
       version = "~> 2.0"
     }
     azuread = {
-      source = "hashicorp/azuread"
-      # Entra groups and the Dependency-Track app registration. Only used
-      # when var.manage_entra is true.
+      source  = "hashicorp/azuread" # only used when manage_entra = true
       version = "~> 3.0"
     }
     random = {
@@ -28,9 +20,7 @@ terraform {
     }
   }
 
-  # Storage account referenced here must exist before `terraform init` —
-  # see docs/deployment-runbook.md, step 3. Its own state key, so an apply
-  # can never touch the old rg-security-platform stack from main.
+  # Change these to your state storage account (docs/deployment-runbook.md).
   backend "azurerm" {
     resource_group_name  = "rg-tfstate-security-platform"
     storage_account_name = "stsecplatstate001"
@@ -41,8 +31,7 @@ terraform {
 }
 
 provider "azurerm" {
-  # Shared-key access is off on the collector storage account, so any
-  # data-plane call the provider makes must use Entra ID.
+  # The collector storage account has shared keys turned off.
   storage_use_azuread = true
 
   features {

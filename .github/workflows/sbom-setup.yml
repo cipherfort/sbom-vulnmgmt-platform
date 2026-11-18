@@ -1,22 +1,11 @@
 name: SBOM Platform Setup
 
-# Deployment runbook steps 11-14 in CI: run once after cd.yml's first apply,
-# and again after rotating the GitHub App key. Safe to re-run.
-#   1. Stores the COLLECTOR_APP_PRIVATE_KEY secret in Key Vault.
-#   2. ops/first_setup.py: admin password, teams, upload keys, policies,
-#      vulnerability sources, the org's parent project. No admin API key is
-#      created, and no key or password is printed.
-#   3. Restarts the collector and the Dependency-Track API, so both pick up
-#      the new keys and settings.
-#   4. Starts the first collection.
+# Run once from main after the first apply, and again after rotating the
+# GitHub App key: stores the App key in Key Vault, sets up Dependency-Track,
+# restarts both apps and starts a collection. Safe to re-run.
 #
-# Secrets:   AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID (as cd.yml)
-#            COLLECTOR_APP_PRIVATE_KEY  the App's .pem; optional once it's in Key Vault
-#            DT_ADVISORIES_TOKEN        optional read-only token for the GitHub Advisories mirror
-# Variable:  SBOM_ORG                   optional; defaults to this repo's org
-#
-# Run it from main: the deployer's federated credential only trusts main, as
-# for cd.yml.
+# Secrets: COLLECTOR_APP_PRIVATE_KEY (the App's .pem), DT_ADVISORIES_TOKEN (optional)
+# Variable: SBOM_ORG (optional; defaults to this repo's org)
 
 on:
   workflow_dispatch:
@@ -36,8 +25,7 @@ env:
   ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
   ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
   ARM_USE_OIDC: true
-  # The Python scripts sign in with the az login below, never a runner VM's
-  # own managed identity.
+  # The Python scripts use the az login below, not a runner VM's own identity.
   AZURE_TOKEN_CREDENTIALS: AzureCliCredential
 
 permissions:
@@ -92,13 +80,12 @@ jobs:
           elif az keyvault secret show --vault-name "$KV" -n github-app-private-key --query id -o tsv >/dev/null 2>&1; then
             echo "COLLECTOR_APP_PRIVATE_KEY not set; github-app-private-key is already in $KV, so leaving it"
           else
-            echo "::error::Set the COLLECTOR_APP_PRIVATE_KEY secret to the App's .pem (runbook step 8), or store it in $KV by hand (step 11)"
+            echo "::error::Set the COLLECTOR_APP_PRIVATE_KEY secret to the App's .pem, or store it in $KV as github-app-private-key"
             exit 1
           fi
 
       - name: Wait for Dependency-Track
         run: |
-          # The first start creates the database schema and takes minutes.
           for _ in $(seq 1 60); do
             curl -fsS "$DT_API/api/version" 2>/dev/null | grep -q '"version"' && { curl -sS "$DT_API/api/version"; echo; exit 0; }
             sleep 15
@@ -147,7 +134,7 @@ jobs:
             echo "### SBOM Platform setup: ${{ job.status }}"
             echo "- Dependency-Track UI: ${DT_UI:-unknown} (from allowed_ip_ranges only)"
             echo "- Sign in as \`admin\`; the password is Key Vault secret \`dtrack-admin-password\` in \`${KV:-the vault}\`."
-            echo "  Reading it needs Key Vault Secrets Officer (runbook step 11)."
+            echo "  Reading it needs Key Vault Secrets Officer (runbook step 5)."
             echo "- Results arrive over the next hour: run \`sbom-collector/kql/collector-status.kql\` in Application Insights."
-            echo "- Terraform repos: copy \`dtrack-ci-api-key\` to the \`DEPENDENCY_TRACK_API_KEY\` secret (runbook step 15)."
+            echo "- Terraform repos: copy \`dtrack-ci-api-key\` to the \`DEPENDENCY_TRACK_API_KEY\` secret (runbook, Optional: Terraform repos)."
           } >> "$GITHUB_STEP_SUMMARY"

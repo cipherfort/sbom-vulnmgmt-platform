@@ -1,38 +1,10 @@
 name: Reusable Container Image Scan
 
-# Called from a Bicep (or any) repo as:
-#   jobs:
-#     image-scan:
-#       permissions:
-#         security-events: write   # required — this job uploads SARIF to your repo's Security tab
-#       uses: sg-cloud-platform/cps-security-platform-infra/.github/workflows/image-scan.yml@main
-#       with:
-#         image_refs: '["myacr.azurecr.io/myapp:1.4.2","mcr.microsoft.com/dotnet/aspnet:8.0"]'
-#         acr_login: true
-#         acr_name: myacr
-#       secrets:
-#         azure_client_id: ${{ secrets.AZURE_CLIENT_ID }}
-#         azure_tenant_id: ${{ secrets.AZURE_TENANT_ID }}
-#         azure_subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-#
-# This exists for the risk the dependency graph can't see: container images
-# referenced from Bicep templates (Container Apps, AKS, App Service,
-# Container Instances, ...) have real CVE data even though the Bicep file
-# itself has no package-manager dependency tree.
-#
-# Findings go to the calling repo's Security tab (SARIF upload, with PR
-# annotations). On private and internal repos that needs GitHub Code
-# Security; without it the upload step fails. For the image's *components*
-# in Dependency-Track, use container-sbom.yml, which submits the image SBOM
-# to the dependency graph the collector already reads.
-#
-# image_refs is intentionally an explicit list, not auto-discovered from
-# .bicep files — resource shapes that carry an image reference vary too
-# much (containerGroups, Container Apps, App Service containers, AKS node
-# images...) to regex reliably across repos without seeing real templates
-# first. Keep this list in sync with what the Bicep templates actually
-# reference; auto-extraction is a reasonable follow-up once real patterns
-# are known.
+# Reusable: Trivy scan of container images, results in the calling repo's
+# Security tab. Private repos need GitHub Code Security for the upload.
+#   uses: <org>/<repo>/.github/workflows/image-scan.yml@main
+#   permissions: { security-events: write }
+#   with: { image_refs: '["myacr.azurecr.io/app:1.2.3"]', acr_login: true, acr_name: myacr }
 
 on:
   workflow_call:
@@ -80,21 +52,9 @@ jobs:
         if: inputs.acr_login
         run: az acr login --name ${{ inputs.acr_name }}
 
-      # Observability-first, same stance as the SBOM pipeline: this never
-      # fails the job on findings. Severity-based gating is a deliberate
-      # follow-up decision (in GHAS's own branch-protection rules, once
-      # SARIF is landing there), not baked in here.
+      # Reports findings; never fails the job on them.
       - name: Trivy scan
-        # Pinned by commit SHA, not a mutable tag, per GHSA-69fq-xp46-6x23 /
-        # CVE-2026-33634: in March 2026 an attacker with compromised
-        # credentials force-pushed 76 of 77 trivy-action version tags
-        # (0.0.1-0.34.2, which includes the @0.28.0 this pin replaced) to
-        # malicious commits containing a credential-stealing infostealer
-        # that ran before the actual Trivy scan. This repo's copy was never
-        # actually invoked during the exposure window (Mar 19-20 2026) —
-        # confirmed via `gh run list`, this reusable workflow had zero runs
-        # at the time — so no secret rotation was needed here, just the fix.
-        # v0.36.0 is a release published after the compromise was contained.
+        # Pinned by SHA: trivy-action's tags were hijacked in March 2026 (CVE-2026-33634).
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: ${{ matrix.image }}

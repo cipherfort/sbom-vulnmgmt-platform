@@ -1,10 +1,5 @@
-# Sample: a repo that builds a container image.
-#
-# container-sbom.yml submits the image's SBOM to GitHub's dependency graph,
-# so the collector picks it up with the repo's other dependencies
-# the next night — nothing to configure on the platform side.
-# release-sbom-attest.yml is the release-time variant: it also signs the SBOM
-# as an artifact attestation tied to the image digest.
+# A repo that builds an image: its SBOM goes to the dependency graph on every
+# main build, and releases also get a signed SBOM attestation.
 
 name: Build image
 

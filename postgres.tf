@@ -4,8 +4,6 @@ resource "azurerm_postgresql_flexible_server" "dtrack" {
   location            = data.azurerm_resource_group.this.location
   tags                = local.tags
 
-  # Burstable is enough for one org's portfolio; move to GP_Standard_D2ds_v5
-  # if Dependency-Track's analysis queue starts lagging.
   sku_name   = "B_Standard_B2s"
   storage_mb = 32768
   version    = "16"
@@ -13,7 +11,6 @@ resource "azurerm_postgresql_flexible_server" "dtrack" {
   administrator_login    = "dtrackadmin"
   administrator_password = random_password.postgres_admin.result
 
-  # Public endpoint, limited by the firewall rule below.
   public_network_access_enabled = true
 
   zone                         = "1"
@@ -21,7 +18,7 @@ resource "azurerm_postgresql_flexible_server" "dtrack" {
   geo_redundant_backup_enabled = false
 
   lifecycle {
-    # Azure may move the server to another zone after a failover.
+    # Azure can move the server to another zone after a failover.
     ignore_changes = [zone]
   }
 }
@@ -33,10 +30,7 @@ resource "azurerm_postgresql_flexible_server_database" "dtrack" {
   charset   = "UTF8"
 }
 
-# 0.0.0.0 is Azure's "allow Azure services" rule. Dependency-Track's outbound
-# IP isn't fixed without a VNet, so this is the only rule that lets it in.
-# It admits any Azure-hosted caller, so the 32-character password and TLS
-# (sslmode=require) are what protect the database.
+# Azure's "allow Azure services" rule: Dependency-Track has no fixed outbound IP.
 resource "azurerm_postgresql_flexible_server_firewall_rule" "allow_azure_services" {
   name             = "AllowAzureServices"
   server_id        = azurerm_postgresql_flexible_server.dtrack.id

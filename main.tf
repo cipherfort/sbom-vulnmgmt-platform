@@ -1,7 +1,4 @@
 locals {
-  # Names follow rg-sbom-<env>, kv-sbom-<env>, ... Key Vault, storage
-  # account and Postgres names are globally unique — if a plan fails on a
-  # name clash, set var.global_name_suffix rather than renaming here.
   env = var.environment
   sfx = var.global_name_suffix
 
@@ -13,14 +10,12 @@ locals {
   }
 }
 
-# Created in bootstrap (deployment runbook step 5) so the deployer's Contributor and RBAC
-# Administrator roles can be scoped to this group alone.
+# Created by hand, so the deployer's roles can be scoped to it.
 data "azurerm_resource_group" "this" {
   name = "rg-sbom-${local.env}"
 }
 
-# Data stays in a UK region. Everything takes the resource group's
-# location, so this one check covers all of it.
+# Everything takes the resource group's location, so this keeps all data in the UK.
 check "uk_region" {
   assert {
     condition     = contains(["uksouth", "ukwest"], data.azurerm_resource_group.this.location)

@@ -1,27 +1,10 @@
 name: Reusable SBOM Scan
 
-# Called from other repos as:
-#   uses: sg-cloud-platform/cps-security-platform-infra/.github/workflows/sbom-scan.yml@main
-#   with:
-#     sbom_type: terraform            # or: npm
-#     project_version: pr-${{ github.event.pull_request.number }}   # or "main" on the default-branch run
-#     dependency_track_url: ${{ vars.DEPENDENCY_TRACK_URL }}
-#   secrets:
-#     dependency_track_api_key: ${{ secrets.DEPENDENCY_TRACK_API_KEY }}   # the ci-uploader team's key
-#
-# Why this still exists next to the collector (ADR-0001): the
-# collector reads GitHub's dependency graph, and the dependency graph has no
-# Terraform ecosystem. This workflow builds the Terraform SBOM from
-# .terraform.lock.hcl and uploads it to the same Dependency-Track.
-#
-# Project naming: "<org>/<repo>/<sbom_type>" under the org's parent project
-# "<org>". The collector owns "<org>/<repo>" for the dependency-graph SBOM;
-# a different name here stops the two uploads replacing each other's
-# components. The org parent must already exist (the collector creates it on
-# its first run for the org, or dtrack_admin.py onboard-org does).
-#
-# The Dependency-Track API is on a public endpoint, so any runner that can
-# reach the internet works; the API key is what authorises the upload.
+# Reusable: builds a Terraform provider SBOM from .terraform.lock.hcl and
+# uploads it to Dependency-Track as <org>/<repo>/terraform. Terraform is the
+# one ecosystem GitHub's dependency graph doesn't cover. Usage:
+# examples/consumer-workflows/ci.yml.
+
 on:
   workflow_call:
     inputs:
@@ -175,9 +158,7 @@ jobs:
           PROJECT_NAME: ${{ inputs.project_name }}
           PARENT: ${{ inputs.parent_project }}
           SBOM_TYPE: ${{ inputs.sbom_type }}
-        # gh-upload-sbom v4 takes a bare hostname; DEPENDENCY_TRACK_URL is
-        # usually set as a full https:// URL, so strip the scheme and any
-        # trailing slash here instead of making every caller get it right.
+        # gh-upload-sbom wants a bare hostname.
         run: |
           set -euo pipefail
           host="${DT_URL#https://}"; host="${host#http://}"; host="${host%/}"
@@ -188,7 +169,6 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Upload SBOM to Dependency-Track
-        # Pinned by commit SHA, as with trivy-action in image-scan.yml.
         uses: DependencyTrack/gh-upload-sbom@331f980a6eba119842052f447c54b09e4888b4c6 # v4.3.0
         with:
           server-hostname: ${{ steps.target.outputs.host }}

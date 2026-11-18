@@ -1,27 +1,10 @@
 name: Reusable Release SBOM Attestation
 
-# Optional: release-time SBOM, signed as an artifact attestation bound to the
-# image digest — the answer to "the SBOM shows the default branch, not what
-# is deployed" in the design doc's risk table.
-#
-# Called from a release job as:
-#   jobs:
-#     attest:
-#       permissions:
-#         contents: read
-#         id-token: write       # Sigstore signing
-#         attestations: write   # store the attestation on the repo
-#         packages: write       # always: the job asks for it, and a called workflow
-#                               # can't have more than its caller grants
-#       uses: sg-cloud-platform/cps-security-platform-infra/.github/workflows/release-sbom-attest.yml@main
-#       with:
-#         image_name: ghcr.io/org/app
-#         image_digest: sha256:...
-#         push_to_registry: true
-#
-# Verify later with:
-#   gh attestation verify oci://<image_name>@<image_digest> --owner <org> \
-#     --predicate-type https://spdx.dev/Document/v2.3
+# Reusable, optional: signs a release SBOM as an attestation on the image
+# digest. The caller must grant contents: read, id-token: write,
+# attestations: write and packages: write. Verify with:
+#   gh attestation verify oci://<image>@<digest> --owner <org> --predicate-type https://spdx.dev/Document/v2.3
+
 on:
   workflow_call:
     inputs:

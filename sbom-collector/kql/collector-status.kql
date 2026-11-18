@@ -1,6 +1,4 @@
-// Latest collector outcome per repo, from the "sbom-result" lines function_app.py
-// logs. Run in Application Insights appi-sbom-<env> -> Logs. Statuses are
-// explained in docs/how-to-use.md ("Collector statuses").
+// Latest collector result per repo. Run in Application Insights appi-sbom-<env> -> Logs.
 traces
 | where timestamp > ago(8d) and message startswith "sbom-result "
 | extend r = parse_json(substring(message, strlen("sbom-result ")))

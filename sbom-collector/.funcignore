@@ -6,6 +6,5 @@ tests/
 ops/
 kql/
 local.settings.json
-local.settings.json.example
 requirements-dev.txt
 pyproject.toml

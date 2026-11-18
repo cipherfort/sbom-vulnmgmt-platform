@@ -1,7 +1,3 @@
-# RBAC only, public endpoint: every caller (the Function, Container Apps'
-# secret reference, the deployer, admins) signs in with Entra ID and needs a
-# role on this vault. The Function has no fixed outbound IP, so there is no
-# firewall to put in front of it.
 resource "azurerm_key_vault" "this" {
   name                       = "kv-sbom-${local.env}${local.sfx}"
   resource_group_name        = data.azurerm_resource_group.this.name
@@ -13,8 +9,7 @@ resource "azurerm_key_vault" "this" {
   soft_delete_retention_days = 90
   tags                       = local.tags
 
-  # Explicit, so a vault recovered from soft delete (same name redeployed)
-  # loses any firewall it had before.
+  # Set explicitly: a vault recovered from soft delete keeps its old firewall otherwise.
   public_network_access_enabled = true
   network_acls {
     default_action = "Allow"
@@ -22,10 +17,8 @@ resource "azurerm_key_vault" "this" {
   }
 }
 
-# The deploying identity (CI's OIDC service principal) writes the secrets
-# Terraform generates. The GitHub App private key and the Dependency-Track
-# API keys are NOT created here — they're added by hand or by
-# ops/first_setup.py, so they never sit in Terraform state.
+# Whoever runs Terraform. The App key and Dependency-Track keys are added
+# after the apply, so they never end up in Terraform state.
 resource "azurerm_role_assignment" "deployer_kv_admin" {
   scope                = azurerm_key_vault.this.id
   role_definition_name = "Key Vault Administrator"

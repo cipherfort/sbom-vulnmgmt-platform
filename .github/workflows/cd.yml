@@ -1,13 +1,8 @@
 name: SBOM Platform CD
 
-# Terraform plan/apply, then the collector code. Pushes to main apply
-# straight away, so protect main with required pull request reviews;
-# Actions > Run workflow runs a plan or apply by hand (use that after
-# changing the TF_VARS_JSON secret). First-time Dependency-Track setup is
-# sbom-setup.yml, run once after the first apply.
-# There is no GitHub environment: the deployer's federated credential trusts
-# repo:<org>/<repo>:ref:refs/heads/main, so only runs from main can sign in to
-# Azure (deployment runbook step 4).
+# Terraform plan/apply, then the collector code. Runs on merges to main that
+# change Terraform or the collector, or by hand (Actions > Run workflow).
+# Only runs from main can sign in to Azure; protect main with required reviews.
 
 on:
   push:
@@ -57,7 +52,7 @@ jobs:
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
-          terraform_wrapper: false # keeps `terraform output -raw` clean
+          terraform_wrapper: false
 
       - uses: azure/login@v2
         with:
@@ -65,9 +60,7 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      # GitHub App ID, alert mailbox, UI IP ranges etc. — none secret, but
-      # environment-specific, so they live in one secret rather than in git.
-      # Shape: the JSON form at the bottom of terraform.tfvars.example.
+      # Shaped like the JSON in terraform.tfvars.example.
       - name: Write terraform.tfvars.json
         env:
           TF_VARS_JSON: ${{ secrets.TF_VARS_JSON }}
@@ -126,10 +119,7 @@ jobs:
         with:
           python-version: "3.11" # must match the Function App runtime_version
 
-      # The same package the runbook builds by hand: the code without what
-      # .funcignore lists, plus Linux x86-64 wheels for Python 3.11. Without
-      # the --platform flags a runner of another OS or architecture builds
-      # wheels the Function can't load, and it then lists no functions.
+      # Linux wheels whatever the runner is; other wheels deploy but don't load.
       - name: Package
         run: |
           PKG="$RUNNER_TEMP/collector"
@@ -150,8 +140,7 @@ jobs:
       - name: Deploy
         run: az functionapp deployment source config-zip -g "$RG" -n "$FUNC" --src "$RUNNER_TEMP/collector.zip" -o none
 
-      # An upload that the Function can't load still "succeeds", so check the
-      # three functions are there.
+      # A package that doesn't load still uploads fine, so check.
       - name: Check the functions loaded
         run: |
           for _ in $(seq 1 20); do
@@ -161,5 +150,5 @@ jobs:
             fi
             sleep 15
           done
-          echo "::error::$FUNC lists no collector functions 5 minutes after the deploy. Check Application Insights for ModuleNotFoundError (docs/deployment-runbook.md, troubleshooting)."
+          echo "::error::$FUNC lists no collector functions 5 minutes after the deploy. Check Application Insights for ModuleNotFoundError (docs/how-to-use.md, Troubleshooting)."
           exit 1

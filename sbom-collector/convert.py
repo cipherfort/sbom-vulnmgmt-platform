@@ -47,10 +47,6 @@ def spdx_to_cyclonedx(spdx, org, repo, branch, timestamp=None):
 
 def refresh_weekday(org, repo):
     """Weekday (0=Mon) on which an unchanged repo is re-collected anyway.
-
-    A weekly full refresh would be simplest, but generate-report has its
-    own rate-limit bucket (x-ratelimit-resource: dependency_sbom, 100/hour per App
-    installation), so a single-night refresh of a large org would take many
-    hours. Spreading the refresh by a stable hash keeps every repo no more than
-    7 days stale while sending ~1/7 of the org each night."""
+    Spreads the weekly refresh across the week, because GitHub allows only
+    100 SBOMs an hour."""
     return uuid.uuid5(uuid.NAMESPACE_URL, f"{org}/{repo}".lower()).int % 7

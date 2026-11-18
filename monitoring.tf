@@ -1,5 +1,3 @@
-# The platform's own workspace: Container Apps logs, Application Insights
-# for the collector, and the diagnostic settings below.
 resource "azurerm_log_analytics_workspace" "this" {
   name                = "log-sbom-${local.env}"
   resource_group_name = data.azurerm_resource_group.this.name
@@ -8,8 +6,6 @@ resource "azurerm_log_analytics_workspace" "this" {
   retention_in_days   = 90
   tags                = local.tags
 }
-
-# Collector failures alert the team within one working day.
 
 resource "azurerm_monitor_action_group" "sbom" {
   name                = "ag-sbom-${local.env}"
@@ -24,15 +20,13 @@ resource "azurerm_monitor_action_group" "sbom" {
   }
 }
 
-# Azure Monitor only has account-level queue metrics, so there is no
-# "poison queue length" metric to alert on. report_poison_depth (every 15
-# minutes) logs the depth as a trace line instead; this alerts on it.
+# Azure has no per-queue length metric, so report_poison_depth logs it every 15 minutes.
 resource "azurerm_monitor_scheduled_query_rules_alert_v2" "poison_queue" {
   name                 = "sbom-poison-queue-not-empty"
   resource_group_name  = data.azurerm_resource_group.this.name
   location             = data.azurerm_resource_group.this.location
   scopes               = [azurerm_application_insights.collector.id]
-  description          = "Messages in sbom-work-poison. Runbook: docs/how-to-use.md, 'Poison-queue alert'."
+  description          = "Messages in sbom-work-poison. See docs/how-to-use.md, Troubleshooting."
   severity             = 2
   evaluation_frequency = "PT15M"
   window_duration      = "PT30M"
@@ -60,14 +54,13 @@ resource "azurerm_monitor_scheduled_query_rules_alert_v2" "poison_queue" {
   }
 }
 
-# Catches the failure the poison queue can't: enumeration itself not running
-# (bad private key, App not installed, Function host down).
+# Enumeration not running at all: bad App key, App uninstalled, Function down.
 resource "azurerm_monitor_scheduled_query_rules_alert_v2" "enumerate_missing" {
   name                 = "sbom-enumerate-not-succeeded"
   resource_group_name  = data.azurerm_resource_group.this.name
   location             = data.azurerm_resource_group.this.location
   scopes               = [azurerm_application_insights.collector.id]
-  description          = "No successful enumerate_repos run in the last 26 hours. Runbook: docs/how-to-use.md, 'HTTP 401 creating installation tokens'."
+  description          = "No successful enumerate_repos run in 26 hours. See docs/how-to-use.md, Troubleshooting."
   severity             = 2
   evaluation_frequency = "PT1H"
   window_duration      = "P1D"
@@ -94,9 +87,7 @@ resource "azurerm_monitor_scheduled_query_rules_alert_v2" "enumerate_missing" {
   }
 }
 
-# Function, Key Vault and Postgres diagnostics to the workspace above. The
-# Container Apps environment already sends its logs there through
-# log_analytics_workspace_id.
+# The Container Apps environment sends its logs to the workspace itself.
 resource "azurerm_monitor_diagnostic_setting" "sbom" {
   for_each = {
     function = { id = azurerm_function_app_flex_consumption.collector.id, category = "FunctionAppLogs", group = null }

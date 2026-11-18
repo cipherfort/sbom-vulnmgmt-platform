@@ -1,6 +1,4 @@
-# Plans the whole configuration against mocked providers — catches cycles,
-# bad references and for_each-on-unknown errors without Azure credentials.
-#   terraform init -backend=false && terraform test
+# Plans everything against mocked providers: terraform init -backend=false && terraform test
 
 mock_provider "azurerm" {
   mock_data "azurerm_resource_group" {

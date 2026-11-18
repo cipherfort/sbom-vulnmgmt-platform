@@ -1,71 +1,23 @@
-# Terraform variables for the CPS SBOM platform.
-#
-# The runbook writes these as terraform.tfvars.json, because CI reads them
-# from the TF_VARS_JSON secret (deployment runbook step 8). The keys are the
-# same; the JSON form is at the bottom of this file. Use one file, not both:
-# Terraform loads terraform.tfvars and terraform.tfvars.json together.
-# Both are git-ignored. Never commit real values.
+# Copy to terraform.tfvars.json (the format CI's TF_VARS_JSON secret uses),
+# or to terraform.tfvars in this format. Both are git-ignored; use only one.
 
-# ---------- Required ----------
+github_app_id = "123456"                   # the collector GitHub App's App ID
+alert_email   = "cps-platform@example.org" # where collector alerts go
 
-# App ID of cps-sbom-collector, the org-owned GitHub App (runbook step 6).
-# GitHub App settings page → "App ID". Not the client ID.
-github_app_id = "123456"
+# Who can open the Dependency-Track UI, as CIDRs. Empty allows everyone.
+# The API is not restricted; every call needs an API key.
+allowed_ip_ranges = ["203.0.113.10/32"]
 
-# Team mailbox for the poison-queue and enumeration-not-succeeded alerts.
-alert_email = "cps-platform@example.org"
+# Optional
+# environment           = "prd"    # names become rg-sbom-prd, kv-sbom-prd, ...
+# global_name_suffix    = ""       # only if a globally unique name is taken
+# dtrack_image_tag      = "4.14.6"
+# dtrack_oidc_client_id = ""       # Entra sign-in, once the app registration exists
+# manage_entra          = false    # true: Terraform creates the Entra groups and app
 
-# ---------- Who can open the Dependency-Track UI ----------
-
-# Applied as allow rules on the ca-dtrack-ui ingress (dependency_track.tf).
-# Everything else gets 403 from the UI.
-#   * Use your office or VPN *egress* address, as the internet sees it
-#     (`curl -4 ifconfig.me` from that network), in CIDR form: /32 for one
-#     address. IPv4 only.
-#   * [] (the default) lets anyone reach the login page. Sign-in is still
-#     required.
-#   * It does not cover the API (ca-dtrack-api). That stays open, because the
-#     collector has no fixed outbound IP. Every API call needs an API key or a
-#     signed-in session.
-# To change it later, edit this list and apply again (in CI: update
-# TF_VARS_JSON first). Only the UI's ingress changes; nothing restarts.
-# RFC 5737 documentation ranges below; replace them.
-allowed_ip_ranges = ["203.0.113.0/24", "198.51.100.10/32"]
-
-# ---------- Names ----------
-
-# Goes into every resource name: rg-sbom-<env>, kv-sbom-<env>, func-sbom-<env>.
-# The resource group rg-sbom-<env> must already exist (runbook step 5).
-environment = "prd"
-
-# Only if the plan fails because a Key Vault, storage account or Postgres
-# name is taken (they're globally unique). 0-6 lowercase letters or digits.
-global_name_suffix = ""
-
-# ---------- Entra sign-in (runbook step 17; leave out until then) ----------
-
-# Option B (by hand): the client ID of the Dependency-Track app registration.
-# Empty means no "OpenID" button; only the local admin can sign in.
-# dtrack_oidc_client_id = "00000000-0000-0000-0000-000000000000"
-
-# Option A: let Terraform create the groups and the app registration instead.
-# Needs Graph permissions on whoever applies. dtrack_oidc_client_id is then
-# ignored.
-# manage_entra = true
-
-# ---------- Optional ----------
-
-# Dependency-Track version. Needs 4.13.0 or later for the org parent project.
-# dtrack_image_tag = "4.14.6"
-
-# ---------- The same, as terraform.tfvars.json (what TF_VARS_JSON holds) ----------
-#
+# As terraform.tfvars.json:
 # {
 #   "github_app_id": "123456",
 #   "alert_email": "cps-platform@example.org",
-#   "allowed_ip_ranges": ["203.0.113.0/24", "198.51.100.10/32"],
-#   "environment": "prd",
-#   "global_name_suffix": ""
+#   "allowed_ip_ranges": ["203.0.113.10/32"]
 # }
-#
-# After step 17, add "dtrack_oidc_client_id": "<client id>".

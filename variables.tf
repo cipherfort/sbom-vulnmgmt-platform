@@ -1,11 +1,11 @@
 variable "environment" {
-  description = "Short environment name used in resource names (rg-sbom-<env>, func-sbom-<env>, ...)"
+  description = "Used in every resource name: rg-sbom-<env>, kv-sbom-<env>, ..."
   type        = string
   default     = "prd"
 }
 
 variable "global_name_suffix" {
-  description = "Appended to globally unique names (Key Vault, storage accounts, Postgres) if the default names are taken. Lowercase letters and digits only."
+  description = "Added to the globally unique names (Key Vault, storage, Postgres, Function) if the defaults are taken"
   type        = string
   default     = ""
 
@@ -15,46 +15,36 @@ variable "global_name_suffix" {
   }
 }
 
-# ---------- Network ----------
-
 variable "allowed_ip_ranges" {
-  description = "CIDRs allowed to open the Dependency-Track UI (office, VPN egress). Empty allows everyone. The API stays open to the internet because the collector has no fixed outbound IP; every API call needs a key or a signed-in session."
+  description = "CIDRs allowed to open the Dependency-Track UI. Empty allows everyone. The API is not restricted."
   type        = list(string)
   default     = []
 }
 
-# ---------- GitHub ----------
-
 variable "github_app_id" {
-  description = "App ID of cps-sbom-collector, the org-owned GitHub App the collector signs in as"
+  description = "App ID of the collector GitHub App"
   type        = string
 }
 
-# ---------- Dependency-Track ----------
-
 variable "dtrack_image_tag" {
-  description = "Dependency-Track image tag (apiserver + frontend share the same release train). The org parent collection project needs 4.13.0 or later."
+  description = "Dependency-Track version (4.13.0 or later)"
   type        = string
   default     = "4.14.6"
 }
 
 variable "dtrack_oidc_client_id" {
-  description = "Client ID of the Dependency-Track Entra app registration. Empty disables OIDC sign-in. Ignored when manage_entra is true (the app is created here)."
+  description = "Client ID of the Dependency-Track Entra app registration. Empty means local accounts only."
   type        = string
   default     = ""
 }
 
-# ---------- Entra (optional) ----------
-
 variable "manage_entra" {
-  description = "Create the Entra groups and the Dependency-Track app registration with Terraform. Needs Graph permissions (Group.ReadWrite.All, Application.ReadWrite.OwnedBy, AppRoleAssignment.ReadWrite.All, Application.Read.All) on the deploying identity; leave false to do it by hand (deployment runbook step 17)."
+  description = "Create the Entra groups and app registration here. Needs Microsoft Graph permissions on the deployer."
   type        = bool
   default     = false
 }
 
-# ---------- Alerting ----------
-
 variable "alert_email" {
-  description = "Mailbox for collector failure alerts"
+  description = "Mailbox for collector alerts"
   type        = string
 }

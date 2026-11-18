@@ -1,17 +1,14 @@
-"""Deployment runbook step 12 without a browser: change Dependency-Track's
-default admin password, keep it in Key Vault, sign in as admin, then run
-dtrack_admin.py bootstrap and onboard-org with that session. No admin API
-key is created. Safe to re-run; the SBOM Platform Setup workflow
-(.github/workflows/sbom-setup.yml) runs it in CI.
+"""First-time Dependency-Track setup: replaces the default admin password
+(stored in Key Vault), then runs dtrack_admin.py bootstrap and onboard-org
+as admin. Safe to re-run. sbom-setup.yml runs it in CI.
 
   export DTRACK_URL=https://ca-dtrack-api.<env-domain>
   export KV_URL=https://kv-sbom-prd.vault.azure.net/
-  export ORG=<the CPS GitHub org login>
-  export GITHUB_ADVISORIES_TOKEN=...   # optional, passed through to bootstrap
+  export ORG=<GitHub org login>
+  export GITHUB_ADVISORIES_TOKEN=...   # optional
   python ops/first_setup.py
 
-Runs as you (az login), so you need Key Vault Secrets Officer on the vault.
-In CI it runs as the deployer, which Terraform makes Key Vault Administrator.
+Needs Key Vault Secrets Officer (or Administrator) on the vault.
 """
 import os
 import pathlib

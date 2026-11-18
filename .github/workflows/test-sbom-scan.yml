@@ -1,18 +1,7 @@
-# One-off manual test of the sbom-scan.yml reusable workflow, using this
-# repo's own Terraform as the guinea pig — no second repo needed. Calls the
-# reusable workflow via a same-repo relative path, so it works regardless
-# of what this repo's actual GitHub org/name is.
-#
-# Run it: Actions tab -> "Test SBOM Scan" -> Run workflow.
-#
-# Requires on THIS repo (Settings > Secrets and variables > Actions):
-#   Variable: DEPENDENCY_TRACK_URL (the dependency_track_api_url output)
-#   Secret:   DEPENDENCY_TRACK_API_KEY (the ci-uploader team's key,
-#             Key Vault secret dtrack-ci-api-key)
-# Expect project "<org>/<this repo>/terraform" under the
-# "<org>" parent project.
-
 name: Test SBOM Scan
+
+# Manual test of sbom-scan.yml on this repo's own Terraform. Needs the
+# DEPENDENCY_TRACK_URL variable and DEPENDENCY_TRACK_API_KEY secret.
 
 on:
   workflow_dispatch:

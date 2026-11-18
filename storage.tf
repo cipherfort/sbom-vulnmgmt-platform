@@ -1,5 +1,4 @@
-# ---------- stsbom<env>: raw SBOM archive, work queue, state table ----------
-
+# Raw SBOM archive, work queue and state table.
 resource "azurerm_storage_account" "sbom" {
   name                     = "stsbom${local.env}${local.sfx}"
   resource_group_name      = data.azurerm_resource_group.this.name
@@ -9,16 +8,11 @@ resource "azurerm_storage_account" "sbom" {
   min_tls_version          = "TLS1_2"
   tags                     = local.tags
 
-  # No keys: every caller uses Entra ID. The public endpoint stays on
-  # because the Function has no fixed outbound IP to allow through a
-  # firewall; without a key, a caller still needs a data role here.
   shared_access_key_enabled       = false
   default_to_oauth_authentication = true
   allow_nested_items_to_be_public = false
 
   blob_properties {
-    # History of what each repo contained. Versioning keeps overwritten
-    # same-day blobs too.
     versioning_enabled = true
 
     delete_retention_policy {
@@ -32,7 +26,7 @@ resource "azurerm_storage_container" "sbom_raw" {
   storage_account_id = azurerm_storage_account.sbom.id
 }
 
-# Flex Consumption pulls its deployment package from a blob container.
+# Holds the Function's code package.
 resource "azurerm_storage_container" "deployments" {
   name               = "function-deployments"
   storage_account_id = azurerm_storage_account.sbom.id
@@ -43,24 +37,20 @@ resource "azurerm_storage_queue" "sbom_work" {
   storage_account_id = azurerm_storage_account.sbom.id
 }
 
-# The Functions host creates sbom-work-poison on first poison message, but
-# report_poison_depth peeks it every 15 minutes — create it up front so that
-# timer never hits a missing queue.
+# Created up front because report_poison_depth reads it before any message fails.
 resource "azurerm_storage_queue" "sbom_work_poison" {
   name               = "sbom-work-poison"
   storage_account_id = azurerm_storage_account.sbom.id
 }
 
-# azapi, not azurerm_storage_table: azurerm (4.81) creates tables over the data
-# plane even with storage_account_id, so the deployer would need a table data
-# role. This goes through ARM, which Contributor covers.
+# azapi because azurerm_storage_table needs a data role on the deployer.
 resource "azapi_resource" "repostate" {
   type      = "Microsoft.Storage/storageAccounts/tableServices/tables@2024-01-01"
   name      = "repostate"
   parent_id = "${azurerm_storage_account.sbom.id}/tableServices/default"
 }
 
-# Raw SBOM retention: 13 months, Cool after 30 days.
+# Cool after 30 days, deleted after 13 months.
 resource "azurerm_storage_management_policy" "sbom" {
   storage_account_id = azurerm_storage_account.sbom.id
 
@@ -86,13 +76,8 @@ resource "azurerm_storage_management_policy" "sbom" {
   }
 }
 
-# ---------- stdtrack<env>: Dependency-Track /data ----------
-#
-# Deliberate exception to "no keys": a Container Apps Azure Files mount only
-# supports account-key auth. The key lives in the environment's storage
-# config only, and the account holds nothing but Dependency-Track's mirror
-# cache and search indexes (all rebuildable).
-
+# Dependency-Track's /data share. It keeps an account key because Container
+# Apps file mounts only support keys; it holds only rebuildable caches.
 resource "azurerm_storage_account" "dtrack" {
   name                            = "stdtrack${local.env}${local.sfx}"
   resource_group_name             = data.azurerm_resource_group.this.name

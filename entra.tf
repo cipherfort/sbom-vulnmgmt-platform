@@ -1,17 +1,11 @@
-# Optional: Entra groups and the Dependency-Track app registration. Off by
-# default (var.manage_entra) because it needs Microsoft Graph permissions
-# most deployment identities don't have; deployment runbook step 17 has the
-# equivalent manual steps.
-
+# Optional (manage_entra): the Entra groups and Dependency-Track app registration.
 locals {
   entra_count = var.manage_entra ? 1 : 0
 
-  # Built from the environment's domain rather than read from
-  # azurerm_container_app.dtrack_ui, because the UI's env vars depend on
-  # this app's client ID — reading the FQDN back would be a cycle.
+  # Built from the domain: reading it from the UI app would be a dependency cycle.
   dtrack_ui_url = "https://ca-dtrack-ui.${azurerm_container_app_environment.this.default_domain}"
 
-  # Named as the Dependency-Track teams dtrack_admin.py bootstrap maps them to.
+  # Must match the team names dtrack_admin.py maps them to.
   entra_groups = var.manage_entra ? {
     "sg-sbom-cps-admins" = "CPS: administers Dependency-Track (teams, policies, configuration)"
     "sg-sbom-cps-users"  = "CPS: views and triages findings in Dependency-Track"
@@ -37,10 +31,7 @@ resource "azuread_application" "dtrack" {
   display_name = "Dependency-Track (sbom-${local.env})"
   owners       = [data.azuread_client_config.current[0].object_id]
 
-  # Emit only groups assigned to this app, as display names — so the
-  # groups claim carries "sg-sbom-cps-admins" / "sg-sbom-cps-users", which
-  # is what the OIDC group mappings in Dependency-Track are named after
-  # (dtrack_admin.py bootstrap), and the token stays small.
+  # Only the assigned groups, by name, which is what Dependency-Track maps.
   group_membership_claims = ["ApplicationGroup"]
 
   optional_claims {
@@ -54,8 +45,6 @@ resource "azuread_application" "dtrack" {
     }
   }
 
-  # The Dependency-Track frontend is a SPA using the authorization code flow
-  # with PKCE; this is its callback page.
   single_page_application {
     redirect_uris = ["${local.dtrack_ui_url}/static/oidc-callback.html"]
   }
@@ -67,7 +56,6 @@ resource "azuread_service_principal" "dtrack" {
   client_id = azuread_application.dtrack[0].client_id
   owners    = [data.azuread_client_config.current[0].object_id]
 
-  # Only members of the assigned groups below can sign in at all.
   app_role_assignment_required = true
 }
 

@@ -1,678 +1,275 @@
 # Deployment runbook
 
-This runbook takes you from a fresh copy of this repo to a platform that collects every repo in the CPS org each night. Do the steps in order. Each step says who does it, where it runs, the commands, and how to check it worked.
+This takes you from an empty subscription to nightly collection, deploying through GitHub Actions. Running it from your own machine is covered in [Deploying without the pipeline](#deploying-without-the-pipeline). If something goes wrong, see [Troubleshooting](how-to-use.md#troubleshooting).
 
-- Why it's built this way: [ADR-0001](adr/0001-team-sbom-platform.md).
-- Day-to-day operation once it's running: [how-to-use](how-to-use.md).
+## What you need
 
-| Stage | Steps | Result |
-|---|---|---|
-| [A. Make the copy yours](#stage-a--make-the-copy-yours) | 1–2 | Repo in your org, pointing at your runner and state storage |
-| [B. Azure prerequisites](#stage-b--azure-prerequisites) | 3–5 | State storage, deployer identity, resource group and roles |
-| [C. GitHub App and repo settings](#stage-c--github-app-and-repo-settings) | 6–8 | Collector App, dependency graph on, CD secrets |
-| [D. Deploy](#stage-d--deploy) | 9–10 | Everything in `rg-sbom-<env>` |
-| [E. Secrets and Dependency-Track](#stage-e--secrets-and-dependency-track) | 11–13 | App key in Key Vault, Dependency-Track configured |
-| [F. First collection](#stage-f--first-collection) | 14–16 | The org collected; five clean nights |
-| [G. Entra sign-in](#stage-g--entra-sign-in) | 17–18 | The team signs in with Entra; local `admin` off |
-| [After go-live](#after-go-live) | — | Changes and operations |
+- **Azure:** Owner on the subscription, to create the resource group and grant roles.
+- **GitHub:** an owner of the org, and admin rights on this repo.
+- **Tools:** `az`, `gh` and `jq`. Deploying by hand also needs Terraform 1.11 or later, Python 3.11, `rsync` and `zip`.
 
-Nothing here needs a landing zone, a VNet or a jump box. Every command runs from your own machine.
-
----
-
-## Before you start
-
-### People
-
-| Who | Needed for steps |
-|---|---|
-| **Azure subscription Owner**, or Contributor plus User Access Administrator | 3, 4, 5, 11 |
-| **Entra admin**: Application Administrator and Groups Administrator. Privileged Role Administrator only for option A in step 17 | 4, 17 |
-| **CPS GitHub org owner** | 2, 6, 7 |
-| **Admin of the new GitHub repo** | 2, 8, 9, 15 |
-| **CPS platform engineer**: runs everything else | all |
-
-### Tools
-
-The Azure CLI (`az`), the GitHub CLI (`gh`), Terraform 1.11.x (`cd.yml` pins 1.11.4), Python 3.11, `git`, `jq`, `curl`, `perl`, `rsync` and `zip`.
-
-### Values to collect
-
-Fill this in once and save it **outside the repo**. Source it in every shell you use for this runbook. Later steps append to it.
+Save these values in a file outside the repo, and run `source ~/sbom.env` in each new terminal:
 
 ```bash
-cat > ~/sbom-deploy.env <<'EOF'
+cat > ~/sbom.env <<'EOF'
 export SUB=<subscription id>
 export TENANT=<Entra tenant id>
-export LOCATION=uksouth                    # uksouth or ukwest (Terraform enforces this)
-export ENV=prd
-export SFX=                                # global_name_suffix: 0-6 lowercase letters/digits, only if a default name is taken
+export ENV=prd                       # names become rg-sbom-prd, kv-sbom-prd, ...
 export RG=rg-sbom-$ENV
-export KV=kv-sbom-$ENV$SFX
-export FUNC=func-sbom-$ENV$SFX
-export STATE_RG=rg-tfstate-sbom
-export STATE_SA=<globally unique storage account name, 3-24 lowercase letters/digits>
-export GH_REPO=<cps-org>/<repo-name>       # where the copy will live
-export RUNNER=ubuntu-latest                # or your org's runner label
-export ORG=<the CPS GitHub org login, exactly as GitHub spells it>
+export KV=kv-sbom-$ENV              # add your global_name_suffix here if you set one
+export STATE_RG=<state storage resource group>
+export STATE_SA=<state storage account>
+export GH_REPO=<org>/<this repo>
+export ORG=<GitHub org to collect>
 EOF
-source ~/sbom-deploy.env
+source ~/sbom.env
 ```
 
----
+## 1. Point the repo at your environment
 
-## Stage A — Make the copy yours
-
-### Step 1 — Point the code at your repo, runner and state storage
-
-**Who:** platform engineer. **Where:** your machine, in a clone of the source repo.
-
-Four things in the code are specific to where this repo was built:
-
-| What | Where | If left unchanged |
-|---|---|---|
-| Repo path `sg-cloud-platform/cps-security-platform-infra` | Workflow header comments | Harmless, but misleading |
-| Repo name `cps-security-platform-infra` | The `repo` tag in `main.tf`, a comment in `test-sbom-scan.yml` | Resources are tagged with the wrong repo |
-| Runner label `cps-ubuntu-latest-private` | `cd.yml`, `sbom-setup.yml`, `sbom-collector-ci.yml`, `sbom-scan.yml`, `image-scan.yml`, `container-sbom.yml`, `release-sbom-attest.yml`, `.github/actionlint.yaml` | Jobs queue forever if your org has no runner with that label |
-| State backend `rg-tfstate-security-platform` / `stsecplatstate001` | `versions.tf` | `terraform init` fails or writes to someone else's account |
-
-Any runner with internet access works. Every endpoint the jobs reach (Azure, Key Vault, the Dependency-Track API) is public. `ubuntu-latest` is fine unless your org requires self-hosted runners.
+Terraform state goes to the storage account named in [`versions.tf`](../versions.tf). Change it to yours:
 
 ```bash
-source ~/sbom-deploy.env
-git switch feature/team-sbom-platform
-git switch -c deploy/$ENV
-
-EXCLUDE=':!docs/deployment-runbook.md'
-git grep -l 'sg-cloud-platform/cps-security-platform-infra' -- . "$EXCLUDE" \
-  | xargs perl -pi -e "s#sg-cloud-platform/cps-security-platform-infra#$GH_REPO#g"
-git grep -l 'cps-security-platform-infra' -- . "$EXCLUDE" \
-  | xargs perl -pi -e "s#cps-security-platform-infra#${GH_REPO#*/}#g"
-git grep -l 'cps-ubuntu-latest-private' -- . "$EXCLUDE" \
-  | xargs perl -pi -e "s#cps-ubuntu-latest-private#$RUNNER#g"
 perl -pi -e "s#\"rg-tfstate-security-platform\"#\"$STATE_RG\"#; s#\"stsecplatstate001\"#\"$STATE_SA\"#" versions.tf
-
-git diff --stat
-git commit -am "Configure for $GH_REPO"
 ```
 
-**Check:** `git grep -n -e stsecplatstate001 -e cps-ubuntu-latest-private -e cps-security-platform-infra -- . "$EXCLUDE"` prints nothing. If `$RUNNER` is a GitHub-hosted label such as `ubuntu-latest`, delete `.github/actionlint.yaml`, because actionlint already knows GitHub-hosted labels.
-
-### Step 2 — Create the repo and push
-
-**Who:** org owner or repo admin. **Where:** your machine.
-
-Push with git. **Don't copy the folder or a zip of it.** `poc/secrets/` (real API keys and a GitHub App private key) and `sbom-collector/local.settings.json` are git-ignored, so git leaves them behind. A file copy would take them along.
+The workflows run on the runner label `cps-ubuntu-latest-private`. If your org doesn't have that runner, switch to GitHub's own runners. Then delete `.github/actionlint.yaml`, which only exists to declare that label:
 
 ```bash
-gh repo create $GH_REPO --internal --description "CPS SBOM platform"
-git remote add team https://github.com/$GH_REPO.git
-git push team deploy/$ENV:main
-
-# Let the org's other repos call sbom-scan.yml and the other reusable workflows.
-gh api -X PUT repos/$GH_REPO/actions/permissions/access -f access_level=organization
+git grep -l cps-ubuntu-latest-private -- .github | xargs perl -pi -e 's/cps-ubuntu-latest-private/ubuntu-latest/g'
+git rm .github/actionlint.yaml
 ```
 
-The push to `main` starts `cd.yml`. That run fails at Azure login because there are no secrets yet. This is expected and changes nothing.
+Commit and push to `main`.
 
-**Check:** `gh api repos/$GH_REPO/contents/poc --jq '.[].name'` lists no `secrets` entry. Protect `main` (Settings → Branches) so changes go through pull requests.
-
----
-
-## Stage B — Azure prerequisites
-
-### Step 3 — Resource providers and Terraform state storage
-
-**Who:** subscription Owner. **Where:** anywhere with `az`.
+## 2. Azure: state, resource group and deployer
 
 ```bash
-source ~/sbom-deploy.env
+source ~/sbom.env
 az account set -s $SUB
-
 for ns in Microsoft.App Microsoft.Web Microsoft.KeyVault Microsoft.Storage Microsoft.DBforPostgreSQL \
-          Microsoft.Insights Microsoft.OperationalInsights; do
-  az provider register --namespace $ns
-done
+          Microsoft.Insights Microsoft.OperationalInsights; do az provider register -n $ns; done
 
-az group create -n $STATE_RG -l $LOCATION
-az storage account create -n $STATE_SA -g $STATE_RG -l $LOCATION \
-  --sku Standard_LRS --kind StorageV2 --https-only true --min-tls-version TLS1_2 \
-  --allow-blob-public-access false --allow-shared-key-access false
-az storage account blob-service-properties update -n $STATE_SA -g $STATE_RG --enable-versioning true
+# State storage (skip if you already have an account)
+az group create -n $STATE_RG -l uksouth
+az storage account create -n $STATE_SA -g $STATE_RG -l uksouth --sku Standard_LRS \
+  --min-tls-version TLS1_2 --allow-blob-public-access false --allow-shared-key-access false
 az storage container-rm create --storage-account $STATE_SA -g $STATE_RG -n terraform-state
+
+# The platform's resource group (uksouth or ukwest)
+az group create -n $RG -l uksouth
 ```
 
-The backend signs in with Entra ID (`use_azuread_auth`), so shared keys can stay off. Versioning lets you recover an earlier state file.
-
-**Check:** `az provider show -n Microsoft.App --query registrationState -o tsv` prints `Registered`.
-
-**UI alternative:** Subscription → Resource providers to register each one. Storage accounts → Create, with *Allow storage account key access* off on the Advanced tab, then Data protection → *Enable versioning for blobs*.
-
-### Step 4 — Deployer identity for GitHub Actions
-
-**Who:** Entra admin (to create the app) and platform engineer. **Where:** anywhere with `az`.
+Create the identity GitHub Actions deploys as. It trusts the `main` branch only, so runs from any other branch can't sign in to Azure:
 
 ```bash
-source ~/sbom-deploy.env
-DEPLOYER_APP_ID=$(az ad app create --display-name sp-sbom-platform-github-actions --query appId -o tsv)
-DEPLOYER_SP=$(az ad sp create --id $DEPLOYER_APP_ID --query id -o tsv)
-
-az ad app federated-credential create --id $DEPLOYER_APP_ID --parameters "{
-  \"name\": \"sbom-cd-main\",
-  \"issuer\": \"https://token.actions.githubusercontent.com\",
-  \"subject\": \"repo:$GH_REPO:ref:refs/heads/main\",
-  \"audiences\": [\"api://AzureADTokenExchange\"]
-}"
-
-echo "export DEPLOYER_APP_ID=$DEPLOYER_APP_ID DEPLOYER_SP=$DEPLOYER_SP" >> ~/sbom-deploy.env
+APP=$(az ad app create --display-name sp-sbom-platform-github-actions --query appId -o tsv)
+SP=$(az ad sp create --id $APP --query id -o tsv)
+az ad app federated-credential create --id $APP --parameters "{
+  \"name\": \"main\", \"issuer\": \"https://token.actions.githubusercontent.com\",
+  \"subject\": \"repo:$GH_REPO:ref:refs/heads/main\", \"audiences\": [\"api://AzureADTokenExchange\"]}"
+echo "export APP=$APP SP=$SP" >> ~/sbom.env
 ```
 
-The subject names the **`main` branch**. The workflows use no GitHub environment, so GitHub issues `repo:<org>/<repo>:ref:refs/heads/main` for pushes to `main` and for *Run workflow* from `main`. A run from any other branch gets a different subject and fails at Azure login, so it can't deploy. There's no approval step: whatever reaches `main` is applied. Protect `main` in step 8 so changes need a reviewed pull request.
-
-If you later add a GitHub environment to the jobs, the subject becomes `repo:<org>/<repo>:environment:<name>`, and this credential has to change to match.
-
-**UI alternative:** Entra ID → App registrations → New registration. Then Certificates & secrets → Federated credentials → Add → *GitHub Actions deploying Azure resources*, entity type **Branch**, branch `main`.
-
-### Step 5 — Resource group and deployer roles
-
-**Who:** subscription Owner. **Where:** anywhere with `az`.
+Give it its roles. It needs Contributor, plus permission to grant the six roles the platform uses:
 
 ```bash
-source ~/sbom-deploy.env
-# Works in bash and zsh (zsh does not word-split an unquoted $VAR)
-grant() { az role assignment create --assignee-object-id $DEPLOYER_SP --assignee-principal-type ServicePrincipal "$@"; }
-
-az group create -n $RG -l $LOCATION
 RG_ID=$(az group show -n $RG --query id -o tsv)
-
+grant() { az role assignment create --assignee-object-id $SP --assignee-principal-type ServicePrincipal "$@"; }
 grant --role Contributor --scope $RG_ID
-# Terraform creates role assignments. This lets it grant only the roles the platform uses.
-grant --role "Role Based Access Control Administrator" --scope $RG_ID \
-  --condition-version 2.0 --condition "((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})) OR (@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {00482a5a-887f-4fb3-b363-3b7fe8e74483, 4633458b-17de-408a-b874-0445c86b69e6, b7e6dc6d-f1e8-4753-8033-0f276bb0955b, 974c5e8b-45b9-4653-ba55-5f855dd0fb88, 0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3, 3913510d-42f4-4e42-8a64-420c390055eb}))"
-
-# Terraform state
-grant --role "Storage Blob Data Contributor" \
-  --scope $(az storage account show -n $STATE_SA -g $STATE_RG --query id -o tsv)
+grant --role "Role Based Access Control Administrator" --scope $RG_ID --condition-version 2.0 \
+  --condition "((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})) OR (@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {00482a5a-887f-4fb3-b363-3b7fe8e74483, 4633458b-17de-408a-b874-0445c86b69e6, b7e6dc6d-f1e8-4753-8033-0f276bb0955b, 974c5e8b-45b9-4653-ba55-5f855dd0fb88, 0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3, 3913510d-42f4-4e42-8a64-420c390055eb}))"
+grant --role "Storage Blob Data Contributor" --scope $(az storage account show -n $STATE_SA -g $STATE_RG --query id -o tsv)
 ```
 
-The conditioned GUIDs are, in order: Key Vault Administrator, Key Vault Secrets User, Storage Blob Data Owner, Storage Queue Data Contributor, Storage Table Data Contributor and Monitoring Metrics Publisher.
+The six roles are Key Vault Administrator, Key Vault Secrets User, Storage Blob Data Owner, Storage Queue Data Contributor, Storage Table Data Contributor and Monitoring Metrics Publisher.
 
-**Check:** `az role assignment list --assignee $DEPLOYER_SP --all -o table` shows the three assignments.
+## 3. GitHub: App, dependency graph and secrets
 
-**UI alternative:** the resource group → Access control (IAM) → Add role assignment. For Role Based Access Control Administrator, pick *Allow user to only assign selected roles to selected principals* on the Conditions tab and select the six roles above.
+**Create the collector App** (in the browser): Org → Settings → Developer settings → GitHub Apps → New GitHub App.
+- Any name, for example `cps-sbom-collector`. Turn off the webhook.
+- Repository permissions: **Contents: read** and **Metadata: read**. Nothing else.
+- Installable on **this account only**.
 
----
+Then note the **App ID**, generate a **private key**, and install the App on the org with **All repositories**.
 
-## Stage C — GitHub App and repo settings
-
-### Step 6 — Create the collector GitHub App
-
-**Who:** CPS GitHub org owner. **Where:** browser.
-
-1. Go to Org → Settings → Developer settings → GitHub Apps → **New GitHub App**.
-   - Name `cps-sbom-collector`. Use any homepage URL. Untick **Webhook → Active**.
-   - Repository permissions: **Contents** read and **Metadata** read. Nothing else.
-   - Where can this App be installed: **Only on this account**.
-2. Note the **App ID** and record it:
-   ```bash
-   echo "export GITHUB_APP_ID=<app id>" >> ~/sbom-deploy.env
-   ```
-3. **Generate a private key.** The Key Vault doesn't exist until step 9, so keep the `.pem` somewhere safe until step 11, then delete it.
-4. Install the App on the org with **All repositories**. With *Only select repositories*, new repos are never collected.
-
-Also create a **read-only GitHub token** for Dependency-Track's GitHub Advisories mirror: a fine-grained token with public-repository read only, ideally owned by a service account. Step 12 uses it.
-
-### Step 7 — Turn on the dependency graph for every repo
-
-**Who:** CPS GitHub org owner or security manager. **Where:** your machine, in the repo.
+**Turn on the dependency graph** for every repo:
 
 ```bash
-source ~/sbom-deploy.env
 gh auth refresh -h github.com -s admin:org
 scripts/github/security-config.sh --org $ORG
 ```
 
-This creates the org configuration `cps-sbom-baseline`. It turns on the dependency graph, automatic dependency submission and Dependabot alerts, and leaves paid features `not_set`. The script attaches it to every repo not already on another configuration, and makes it the default for new repos. It lists the existing configurations first. Add the same three settings to those configurations, or re-run with `--include-configured` to replace them.
-
-The token needs `admin:org`. GitHub's docs say `write:org`, but the API refuses that with a 403. If the org has no Advanced Security plan, the script prints `No Advanced Security plan in <org>` and creates the configuration without the two paid settings. That is expected.
-
-**Check:** Org → Settings → Code security → Configurations shows `cps-sbom-baseline` on every repo. Attaching runs in the background, so allow a few minutes. Then, in any repo, Insights → Dependency graph shows dependencies.
-
-**UI alternative:** Org → Settings → Code security → Configurations → **New configuration**. Set Dependency graph, Automatic dependency submission and Dependabot alerts to Enabled, leave the rest Not set, then *Apply to* → All repositories, and *Use as default* for new repositories.
-
-### Step 8 — Terraform variables, repo secrets and environment
-
-**Who:** admin of the new repo. **Where:** your machine.
-
-Write `terraform.tfvars.json`. It's git-ignored. **Keep a copy outside the repo**: GitHub secrets can't be read back, and you'll edit this file again in step 17.
+**Add the repo secrets** and protect `main`. Every merge to `main` deploys, so changes must go through a reviewed pull request. [`terraform.tfvars.example`](../terraform.tfvars.example) explains each variable.
 
 ```bash
-source ~/sbom-deploy.env
-cat > terraform.tfvars.json <<JSON
+cat > ~/sbom.tfvars.json <<JSON
 {
   "environment": "$ENV",
-  "global_name_suffix": "$SFX",
-  "github_app_id": "$GITHUB_APP_ID",
-  "alert_email": "<team mailbox for collector alerts>",
-  "allowed_ip_ranges": ["<office or VPN egress CIDR>"]
+  "github_app_id": "<App ID>",
+  "alert_email": "<team mailbox>",
+  "allowed_ip_ranges": ["<office or VPN egress IP>/32"]
 }
 JSON
-jq . terraform.tfvars.json > /dev/null && echo valid
-cp terraform.tfvars.json ~/sbom-terraform.tfvars.json
-```
+gh secret set TF_VARS_JSON              -R $GH_REPO < ~/sbom.tfvars.json
+gh secret set AZURE_CLIENT_ID           -R $GH_REPO --body $APP
+gh secret set AZURE_TENANT_ID           -R $GH_REPO --body $TENANT
+gh secret set AZURE_SUBSCRIPTION_ID     -R $GH_REPO --body $SUB
+gh secret set COLLECTOR_APP_PRIVATE_KEY -R $GH_REPO < <downloaded>.private-key.pem
+rm <downloaded>.private-key.pem
 
-`allowed_ip_ranges` limits who can open the Dependency-Track UI. Use your office or VPN egress address in CIDR form (`curl -4 ifconfig.me` from that network, plus `/32`), or an empty list to allow everyone. It doesn't restrict the API, which stays open and needs a key on every call. [`terraform.tfvars.example`](../terraform.tfvars.example) explains every variable.
-
-Optionally, validate locally. This needs no Azure access:
-
-```bash
-terraform init -backend=false && terraform validate && terraform test
-```
-
-Set the secrets and the environment. The pipeline reads every resource name from Terraform, so no name needs setting here:
-
-```bash
-gh secret set AZURE_CLIENT_ID       -R $GH_REPO --body $DEPLOYER_APP_ID
-gh secret set AZURE_TENANT_ID       -R $GH_REPO --body $TENANT
-gh secret set AZURE_SUBSCRIPTION_ID -R $GH_REPO --body $SUB
-gh secret set TF_VARS_JSON          -R $GH_REPO < terraform.tfvars.json
-
-# For the SBOM Platform Setup workflow (step 11): the App's private key from step 6,
-# and optionally the read-only GitHub Advisories token
-gh secret set COLLECTOR_APP_PRIVATE_KEY -R $GH_REPO < <path-to>.private-key.pem
-read -rs T && gh secret set DT_ADVISORIES_TOKEN -R $GH_REPO --body "$T" && unset T
-# Only if the org to collect isn't the org this repo is in:
-# gh variable set SBOM_ORG -R $GH_REPO --body $ORG
-
-# main applies on every push, so changes must arrive by reviewed pull request
 gh api -X PUT repos/$GH_REPO/branches/main/protection --input - <<'JSON'
 {"required_status_checks": null, "enforce_admins": true,
- "required_pull_request_reviews": {"required_approving_review_count": 1},
- "restrictions": null}
+ "required_pull_request_reviews": {"required_approving_review_count": 1}, "restrictions": null}
 JSON
 ```
 
-Now delete the `.pem`, including any copy in Downloads. The GitHub secret is the copy the pipeline uses.
+Two more settings are optional:
+- **`DT_ADVISORIES_TOKEN` secret:** a read-only GitHub token. It turns on the GitHub Advisories vulnerability source.
+- **`SBOM_ORG` variable:** set it if the org to collect isn't the org this repo is in.
 
-**Check:** `gh secret list -R $GH_REPO` shows `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `TF_VARS_JSON` and `COLLECTOR_APP_PRIVATE_KEY`, plus `DT_ADVISORIES_TOKEN` if you set it.
-
-**UI alternative:** the repo → Settings → Secrets and variables → Actions for the secrets (paste the whole `.pem`, BEGIN and END lines included); Settings → Branches (or Rules → Rulesets) → protect `main` with *Require a pull request before merging* and one approval.
-
----
-
-## Stage D — Deploy
-
-### Step 9 — Plan, then apply
-
-**Who:** platform engineer. **Where:** your machine (the runner does the work).
-
-```bash
-source ~/sbom-deploy.env
-gh workflow run cd.yml -R $GH_REPO --ref main -f action=plan
-sleep 10; RUN=$(gh run list -R $GH_REPO -w cd.yml -L 1 --json databaseId -q '.[0].databaseId')
-gh run watch $RUN -R $GH_REPO
-gh run view $RUN -R $GH_REPO --log | grep -E 'Plan:|Error'
-```
-
-Read the plan. It should create 38 resources and destroy nothing. Then apply:
+## 4. Deploy
 
 ```bash
 gh workflow run cd.yml -R $GH_REPO --ref main -f action=apply
-sleep 10; RUN=$(gh run list -R $GH_REPO -w cd.yml -L 1 --json databaseId -q '.[0].databaseId')
-gh run watch $RUN -R $GH_REPO
+sleep 10; gh run watch -R $GH_REPO $(gh run list -R $GH_REPO -w cd.yml -L 1 --json databaseId -q '.[0].databaseId')
 ```
 
-The run applies without asking. Postgres and the Container Apps environment are the slow parts, so allow 20–40 minutes.
+This creates the platform, which is 38 resources and takes 20–40 minutes, and then deploys the collector code. The run fails if the Function doesn't load its three functions.
 
-`collector-deploy` builds the collector package, uploads it, and then checks that the Function lists its three functions. If it doesn't, the job fails rather than leaving an empty Function App. After the first apply, merges to `main` that change `*.tf`, the lock file or `sbom-collector/` run plan and apply by themselves. Documentation changes don't trigger a run. The pull request review before the merge is the approval.
-
-If the plan fails because a name is taken (the Key Vault, storage accounts and Postgres server need globally unique names):
-1. Set `SFX` in `~/sbom-deploy.env`.
-2. Add `"global_name_suffix"` to the tfvars and update `TF_VARS_JSON`.
-3. Run the plan again.
-
-**UI alternative:** Actions → *SBOM Platform CD* → Run workflow, choose `plan` or `apply`.
-
-**Without GitHub Actions: apply from your machine.** This is how the 11 Nov 2026 test deployment was done. You need Owner on `$RG` (or Contributor plus the conditioned RBAC Administrator from step 5) and Storage Blob Data Contributor on `$STATE_SA`. Steps 4 and 8's secrets and environment are then optional, but you still need `terraform.tfvars.json`.
+Then run the one-off setup:
 
 ```bash
-source ~/sbom-deploy.env
-az login && az account set -s $SUB
+gh workflow run sbom-setup.yml -R $GH_REPO --ref main
+sleep 10; gh run watch -R $GH_REPO $(gh run list -R $GH_REPO -w sbom-setup.yml -L 1 --json databaseId -q '.[0].databaseId')
+```
+
+This run:
+1. Stores the App key in Key Vault.
+2. Sets the Dependency-Track admin password and stores it in Key Vault.
+3. Creates the teams, API keys, policies and vulnerability sources.
+4. Restarts both apps.
+5. Starts the first collection.
+
+**Check**, after about 10 minutes:
+
+```bash
+az monitor app-insights query -g $RG --app appi-sbom-$ENV \
+  --analytics-query "$(cat sbom-collector/kql/collector-status.kql)" -o table
+```
+
+Repos should show `ok`. GitHub allows 100 SBOMs an hour, so an org with more repos takes several hours to collect the first time. Vulnerability counts appear the next day, once Dependency-Track has downloaded its vulnerability databases.
+
+## 5. Give people access
+
+Reading the admin password needs a Key Vault role. Grant it to a group rather than to individuals:
+
+```bash
+az role assignment create --assignee-object-id <admins group object id> --assignee-principal-type Group \
+  --role "Key Vault Secrets Officer" --scope $(az keyvault show -n $KV --query id -o tsv)
+az keyvault secret show --vault-name $KV -n dtrack-admin-password --query value -o tsv
+```
+
+Sign in to the UI as `admin`. Its address is in the summary of the setup run. In Administration → Access Management → Managed Users, create an account for each person. Add each account to the team `sg-sbom-cps-admins` (full admin) or `sg-sbom-cps-users` (view and triage).
+
+To use Entra accounts instead, see the next section.
+
+## Optional: Entra sign-in
+
+People then sign in with their work account, and two Entra groups control access. The group names must be exactly these, because the Dependency-Track teams are mapped to them.
+
+```bash
+source ~/sbom.env
+for g in sg-sbom-cps-admins sg-sbom-cps-users; do az ad group create --display-name $g --mail-nickname $g -o none; done
+
+DT_UI=$(az containerapp show -g $RG -n ca-dtrack-ui --query properties.configuration.ingress.fqdn -o tsv)
+DT_APP=$(az ad app create --display-name "Dependency-Track ($ENV)" --sign-in-audience AzureADMyOrg --query appId -o tsv)
+az rest --method PATCH --uri https://graph.microsoft.com/v1.0/applications/$(az ad app show --id $DT_APP --query id -o tsv) \
+  --headers Content-Type=application/json --body "{
+  \"spa\": {\"redirectUris\": [\"https://$DT_UI/static/oidc-callback.html\"]},
+  \"groupMembershipClaims\": \"ApplicationGroup\",
+  \"optionalClaims\": {
+    \"idToken\":     [{\"name\": \"groups\", \"additionalProperties\": [\"cloud_displayname\"]}],
+    \"accessToken\": [{\"name\": \"groups\", \"additionalProperties\": [\"cloud_displayname\"]}]}}"
+
+# Only the two groups can sign in
+DT_SP=$(az ad sp create --id $DT_APP --query id -o tsv)
+az rest --method PATCH --uri https://graph.microsoft.com/v1.0/servicePrincipals/$DT_SP \
+  --headers Content-Type=application/json --body '{"appRoleAssignmentRequired": true}'
+for g in sg-sbom-cps-admins sg-sbom-cps-users; do
+  az rest --method POST --uri https://graph.microsoft.com/v1.0/servicePrincipals/$DT_SP/appRoleAssignedTo \
+    --headers Content-Type=application/json -o none --body "{\"principalId\": \"$(az ad group show -g $g --query id -o tsv)\",
+    \"resourceId\": \"$DT_SP\", \"appRoleId\": \"00000000-0000-0000-0000-000000000000\"}"
+done
+```
+
+1. Add `"dtrack_oidc_client_id": "<DT_APP>"` to `~/sbom.tfvars.json`.
+2. Update the `TF_VARS_JSON` secret from it, and run `cd.yml` with `apply` again.
+3. Add people to the two groups.
+4. Once Entra sign-in works, suspend the local `admin` account: Managed Users → `admin` → Suspended.
+
+Terraform can create the groups and app itself (`"manage_entra": true`), but the deployer then needs Microsoft Graph application permissions. Most tenants won't allow that on a pipeline identity.
+
+## Optional: Terraform repos
+
+The collector can't see Terraform providers. Terraform repos call [`sbom-scan.yml`](../.github/workflows/sbom-scan.yml); copy the two files in [`examples/consumer-workflows/`](../examples/consumer-workflows/). Set the address and key once for the whole org:
+
+```bash
+gh variable set DEPENDENCY_TRACK_URL --org $ORG --visibility all \
+  --body "https://$(az containerapp show -g $RG -n ca-dtrack-api --query properties.configuration.ingress.fqdn -o tsv)"
+az keyvault secret show --vault-name $KV -n dtrack-ci-api-key --query value -o tsv \
+  | gh secret set DEPENDENCY_TRACK_API_KEY --org $ORG --visibility all
+gh api -X PUT repos/$GH_REPO/actions/permissions/access -f access_level=organization
+```
+
+To try it on this repo first, run **Test SBOM Scan** from the Actions tab.
+
+## Deploying without the pipeline
+
+You can run the same steps from your own machine. You need Owner on the resource group and Storage Blob Data Contributor on the state account. Skip the deployer identity and the GitHub secrets, but keep `~/sbom.tfvars.json`.
+
+```bash
+source ~/sbom.env && az login && az account set -s $SUB
 export ARM_SUBSCRIPTION_ID=$SUB
-terraform init
-terraform plan -var-file=terraform.tfvars.json -out=sbom.tfplan    # expect 38 to add, 0 to destroy
-terraform apply sbom.tfplan
-```
+terraform init && terraform apply -var-file=$HOME/sbom.tfvars.json
 
-Then deploy the collector code. That is `cd.yml`'s `collector-deploy` job. The dependencies must be Linux wheels for Python 3.11, so the `--platform` flags matter when you build on a Mac:
-
-```bash
-PKG=$(mktemp -d)
+# Collector code. The --platform flags matter: other wheels upload fine but don't load.
+FUNC=$(terraform output -raw function_app_name); PKG=$(mktemp -d)
 rsync -a --exclude-from=sbom-collector/.funcignore --exclude=.funcignore --exclude=.python_packages sbom-collector/ $PKG/
 python3 -m pip install -q --target $PKG/.python_packages/lib/site-packages -r sbom-collector/requirements.txt \
   --platform manylinux2014_x86_64 --platform manylinux_2_17_x86_64 --python-version 3.11 \
   --implementation cp --only-binary=:all:
 (cd $PKG && zip -qr ../collector.zip .)
 az functionapp deployment source config-zip -g $RG -n $FUNC --src $PKG/../collector.zip
-```
+az functionapp function list -g $RG -n $FUNC --query "[].name" -o tsv     # expect three functions
 
-**Check:** Portal → `$FUNC` → Functions lists `enumerate_repos`, `collect_sbom` and `report_poison_depth`. Re-run both blocks after any change; keep the `.tfvars` file and state as for CI.
-
-### Step 10 — Check the deployment and get the addresses
-
-**Who:** platform engineer. **Where:** anywhere with `az`.
-
-```bash
-source ~/sbom-deploy.env
-az resource list -g $RG --query "[].{name:name, type:type}" -o table
-
-fqdn() { az containerapp show -g $RG -n $1 --query properties.configuration.ingress.fqdn -o tsv; }
-cat >> ~/sbom-deploy.env <<EOF
-export DT_UI=https://$(fqdn ca-dtrack-ui) DT_API=https://$(fqdn ca-dtrack-api)
-EOF
-source ~/sbom-deploy.env
-echo "UI: $DT_UI  API: $DT_API"
-
-az functionapp show -g $RG -n $FUNC --query "{state:properties.state, host:properties.defaultHostName}" -o table
-```
-
-**Check:** `curl -s $DT_API/api/version` returns JSON with `"version":"4.14.6"`. The first start creates the database schema and can take several minutes. Then open `$DT_UI` from an address in `allowed_ip_ranges`: you should get the login page.
-
-**UI alternative:** the resource group in the portal. Each container app's Overview shows its *Application Url*.
-
----
-
-## Stage E — Secrets and Dependency-Track
-
-### Step 11 — Key Vault access and the App private key
-
-**Who:** subscription Owner grants the role; platform engineer stores the key. **Where:** anywhere with `az`.
-
-> **With the pipeline, steps 11–14 are one workflow run.** Grant the role below; people need it to read the admin password later. Then run **SBOM Platform Setup** ([`sbom-setup.yml`](../.github/workflows/sbom-setup.yml)) from `main`:
-> ```bash
-> gh workflow run sbom-setup.yml -R $GH_REPO --ref main
-> sleep 10; gh run watch $(gh run list -R $GH_REPO -w sbom-setup.yml -L 1 --json databaseId -q '.[0].databaseId') -R $GH_REPO
-> ```
-> It stores `COLLECTOR_APP_PRIVATE_KEY` in Key Vault, waits for Dependency-Track, runs `first_setup.py` (step 12), restarts both apps (step 13) and starts the first collection (step 14). It runs as the deployer, which Terraform makes Key Vault Administrator, and prints no key or password. Then go to step 14's **Check**. The commands below are the same work by hand.
-
-The deployer can't grant this role; its condition doesn't allow it. Grant it to a group of CPS platform admins rather than to individuals. Use PIM if you have it.
-
-```bash
-source ~/sbom-deploy.env
-KV_ID=$(az keyvault show -n $KV --query id -o tsv)
-az role assignment create --assignee-object-id <platform-admins-group-object-id> --assignee-principal-type Group \
-  --role "Key Vault Secrets Officer" --scope $KV_ID
-
-# By hand only: wait a few minutes for the role to apply, then
-az keyvault secret set --vault-name $KV -n github-app-private-key --file <path-to>.private-key.pem --output none
-```
-
-Delete the `.pem`, including any copy in Downloads.
-
-**Check:** `az keyvault secret list --vault-name $KV --query "[].name" -o tsv` lists `github-app-private-key` and `postgres-admin-password`.
-
-**UI alternative:** the vault → Access control (IAM) for the role; Objects → Secrets → Generate/Import, pasting the whole `.pem` (including the BEGIN and END lines) as the value.
-
-### Step 12 — Set up Dependency-Track
-
-**Who:** platform engineer. **Where:** your machine, in the repo, signed in with `az login`. You need the Secrets Officer role from step 11, because the script writes to Key Vault as you.
-
-```bash
-source ~/sbom-deploy.env
-cd sbom-collector
-python3.11 -m venv .venv && .venv/bin/pip install -q -r requirements.txt
-
-export DTRACK_URL=$DT_API KV_URL=https://$KV.vault.azure.net/
-read -rs GITHUB_ADVISORIES_TOKEN && export GITHUB_ADVISORIES_TOKEN    # the read-only token from step 6
-.venv/bin/python ops/first_setup.py
-cd ..
-```
-
-[`ops/first_setup.py`](../sbom-collector/ops/first_setup.py) does what an admin would otherwise do in the browser:
-1. Changes the default `admin` / `admin` password to a random one and stores it in Key Vault as `dtrack-admin-password`.
-2. Signs in as `admin` and uses that session for the next two steps, so no admin API key is created.
-3. Runs `dtrack_admin.py bootstrap`:
-   - turns on the NVD, OSV and GitHub Advisories sources;
-   - creates the teams `bom-uploader`, `ci-uploader`, `sg-sbom-cps-admins` and `sg-sbom-cps-users`;
-   - writes the uploader keys to Key Vault as `dtrack-api-key` and `dtrack-ci-api-key`;
-   - adds the `CPS restricted` licence group and the three starter policies.
-4. Runs `dtrack_admin.py onboard-org $ORG`, which creates the org's parent collection project. Run it again by hand with `--teams-webhook <url>` to send new vulnerabilities and policy violations to a Teams channel.
-
-It is safe to re-run.
-
-**Check:**
-- `az keyvault secret list --vault-name $KV --query "[].name" -o tsv` now also lists `dtrack-admin-password`, `dtrack-api-key` and `dtrack-ci-api-key`.
-- Sign in to `$DT_UI` as `admin` with the password from Key Vault. Administration → Teams shows the four teams, Policy Management shows three policies, and Projects shows `$ORG`.
-
-**UI alternative:** sign in as `admin` / `admin` and change the password when asked. Create the API key under Administration → Access Management → Teams → Administrators → API Keys. Then run `dtrack_admin.py bootstrap --key-vault-url $KV_URL` and `onboard-org $ORG` with `DTRACK_ADMIN_API_KEY` set to that key. The team, policy and source setup has no sensible UI path; use the script.
-
-### Step 13 — Restart the collector and the Dependency-Track API
-
-**Who:** platform engineer. **Where:** anywhere with `az`.
-
-The collector caches secrets for the life of an instance, so restart it to pick up the new keys. Dependency-Track schedules its OSV mirror at startup, which was before `bootstrap` chose the ecosystems. Until it restarts, the log says `Google OSV mirroring is disabled. No ecosystem selected` and OSV stays off for 24 hours.
-
-```bash
-source ~/sbom-deploy.env
+# The same work as sbom-setup.yml
+az keyvault secret set --vault-name $KV -n github-app-private-key --file <downloaded>.private-key.pem -o none
+python3.11 -m venv .venv && .venv/bin/pip install -q -r sbom-collector/requirements.txt
+DTRACK_URL=$(terraform output -raw dependency_track_api_url) KV_URL=https://$KV.vault.azure.net/ ORG=$ORG \
+  .venv/bin/python sbom-collector/ops/first_setup.py
 az functionapp restart -g $RG -n $FUNC
-REV=$(az containerapp revision list -g $RG -n ca-dtrack-api --query "[?properties.active].name | [0]" -o tsv)
-az containerapp revision restart -g $RG -n ca-dtrack-api --revision $REV
+az containerapp revision restart -g $RG -n ca-dtrack-api \
+  --revision $(az containerapp revision list -g $RG -n ca-dtrack-api --query "[?properties.active].name | [0]" -o tsv)
+curl -X POST "https://$(az functionapp show -g $RG -n $FUNC --query properties.defaultHostName -o tsv)/admin/functions/enumerate_repos" \
+  -H "x-functions-key: $(az functionapp keys list -g $RG -n $FUNC --query masterKey -o tsv)" \
+  -H 'Content-Type: application/json' -d '{}'
 ```
 
-The first NVD and OSV downloads take an hour or more. Projects uploaded before they finish show no vulnerabilities until the next analysis, so judge the first collection's vulnerability counts the next day.
-
-**UI alternative:** the Function App → Overview → Restart; `ca-dtrack-api` → Revisions and replicas → the active revision → Restart.
-
----
-
-## Stage F — First collection
-
-### Step 14 — Run the first collection
-
-**Who:** platform engineer. **Where:** anywhere with `az`.
-
-```bash
-source ~/sbom-deploy.env
-FUNC_HOST=$(az functionapp show -g $RG -n $FUNC --query properties.defaultHostName -o tsv)  # top-level defaultHostName is null on Flex Consumption
-MASTER=$(az functionapp keys list -g $RG -n $FUNC --query masterKey -o tsv)
-curl -sS -o /dev/null -w '%{http_code}\n' -X POST "https://$FUNC_HOST/admin/functions/enumerate_repos" \
-  -H "x-functions-key: $MASTER" -H 'Content-Type: application/json' -d '{}'
-```
-
-Expect `202`. Each repo's outcome is logged as an `sbom-result` line a few minutes later. Run [`collector-status.kql`](../sbom-collector/kql/collector-status.kql) in Application Insights `appi-sbom-<env>` → Logs, or from the CLI:
-
-```bash
-az monitor app-insights query -g $RG --app appi-sbom-$ENV --analytics-query "$(cat sbom-collector/kql/collector-status.kql)" -o table
-```
-
-GitHub allows **100 SBOMs an hour per org**, so an org of more than 100 repos takes hours to collect. Throttled jobs wait on the queue; that's expected. The statuses are explained in [how-to-use §5](how-to-use.md#5-collector-statuses).
-
-**Check:**
-- Repos show `ok`, or `no-dependency-graph` for repos with no manifests.
-- In Dependency-Track, `$ORG` has `$ORG/<repo>` children.
-- For three repos, compare the component counts with GitHub → Insights → Dependency graph.
-
-**UI alternative:** the Function App → Functions → `enumerate_repos` → Code + Test → Test/Run.
-
-### Step 15 — Test the Terraform path (`sbom-scan.yml`)
-
-**Who:** admin of the new repo. **Where:** anywhere with `az` and `gh`.
-
-```bash
-source ~/sbom-deploy.env
-gh variable set DEPENDENCY_TRACK_URL -R $GH_REPO --body $DT_API
-az keyvault secret show --vault-name $KV -n dtrack-ci-api-key --query value -o tsv \
-  | gh secret set DEPENDENCY_TRACK_API_KEY -R $GH_REPO
-gh workflow run test-sbom-scan.yml -R $GH_REPO
-```
-
-**Check:** project `$ORG/<repo>/terraform` appears under the parent `$ORG`.
-
-To let every Terraform repo in the org use the scan, set both values once at org level:
-
-```bash
-gh variable set DEPENDENCY_TRACK_URL --org $ORG --visibility all --body $DT_API
-az keyvault secret show --vault-name $KV -n dtrack-ci-api-key --query value -o tsv \
-  | gh secret set DEPENDENCY_TRACK_API_KEY --org $ORG --visibility all
-```
-
-### Step 16 — Five clean nights
-
-**Who:** platform engineer. **Where:** Application Insights and the alert mailbox.
-
-Collection now runs by itself: `enumerate_repos` at 02:00 UTC, and `report_poison_depth` every 15 minutes.
-
-Wait for **five consecutive nights** with:
-- no `sbom-poison-queue-not-empty` alert;
-- no `sbom-enumerate-not-succeeded` alert;
-- `collector-status.kql` showing steady counts, with nothing in `error` or `timeout`.
-
----
-
-## Stage G — Entra sign-in
-
-### Step 17 — Groups and the Dependency-Track app registration
-
-**Who:** Entra admin. **Where:** anywhere with `az`.
-
-There are two options:
-
-- **Option B, by hand (recommended).** You create the groups and the app with the commands below.
-- **Option A, Terraform (`manage_entra = true`).** Terraform creates them, but the CI identity then needs `AppRoleAssignment.ReadWrite.All`, which lets it grant itself any permission in the tenant. Most government tenants won't allow that on a pipeline identity.
-
-The group names must be exactly `sg-sbom-cps-admins` and `sg-sbom-cps-users`. Step 12 mapped Dependency-Track teams to those names.
-
-**Option B — by hand**
-
-```bash
-source ~/sbom-deploy.env
-for g in sg-sbom-cps-admins sg-sbom-cps-users; do az ad group create --display-name $g --mail-nickname $g --output none; done
-
-DT_APP=$(az ad app create --display-name "Dependency-Track (sbom-$ENV)" --sign-in-audience AzureADMyOrg --query appId -o tsv)
-DT_APP_OBJ=$(az ad app show --id $DT_APP --query id -o tsv)
-
-# SPA callback, and a groups claim that carries only assigned groups, as display names
-cat > "${TMPDIR:-/tmp}/dt-app.json" <<JSON
-{
-  "spa": {"redirectUris": ["$DT_UI/static/oidc-callback.html"]},
-  "groupMembershipClaims": "ApplicationGroup",
-  "optionalClaims": {
-    "idToken":     [{"name": "groups", "additionalProperties": ["cloud_displayname"]}],
-    "accessToken": [{"name": "groups", "additionalProperties": ["cloud_displayname"]}]
-  }
-}
-JSON
-az rest --method PATCH --uri https://graph.microsoft.com/v1.0/applications/$DT_APP_OBJ \
-  --headers Content-Type=application/json --body @"${TMPDIR:-/tmp}/dt-app.json"
-
-# Only assigned groups can sign in
-DT_SP=$(az ad sp create --id $DT_APP --query id -o tsv)
-az rest --method PATCH --uri https://graph.microsoft.com/v1.0/servicePrincipals/$DT_SP \
-  --headers Content-Type=application/json --body '{"appRoleAssignmentRequired": true}'
-for g in sg-sbom-cps-admins sg-sbom-cps-users; do
-  GID=$(az ad group show --group $g --query id -o tsv)
-  az rest --method POST --uri https://graph.microsoft.com/v1.0/servicePrincipals/$DT_SP/appRoleAssignedTo \
-    --headers Content-Type=application/json \
-    --body "{\"principalId\": \"$GID\", \"resourceId\": \"$DT_SP\", \"appRoleId\": \"00000000-0000-0000-0000-000000000000\"}" \
-    --output none
-done
-
-echo "export DT_APP=$DT_APP DT_SP=$DT_SP" >> ~/sbom-deploy.env
-```
-
-Then add `"dtrack_oidc_client_id": "<DT_APP>"` to `~/sbom-terraform.tfvars.json`. Update `TF_VARS_JSON` from it and apply, as in step 9:
-
-```bash
-gh secret set TF_VARS_JSON -R $GH_REPO < ~/sbom-terraform.tfvars.json
-gh workflow run cd.yml -R $GH_REPO -f action=apply
-```
-
-**UI alternative for option B:** Entra ID → Groups → New group, twice. Then App registrations → New registration:
-- Authentication → *Single-page application* with the redirect URI above.
-- Token configuration → Add groups claim → *Groups assigned to the application*, emitted as **Cloud-only group display names**.
-- Enterprise applications → the app → Properties → *Assignment required* = Yes.
-- Users and groups → add both groups.
-
-**Option A — Terraform**
-
-Give the deployer these Microsoft Graph application permissions. The function below looks up their IDs by name. Granting admin consent needs a Privileged Role Administrator:
-
-```bash
-GRAPH=00000003-0000-0000-c000-000000000000
-perm() { az ad sp show --id $GRAPH --query "appRoles[?value=='$1'].id | [0]" -o tsv; }
-az ad app permission add --id $DEPLOYER_APP_ID --api $GRAPH --api-permissions \
-  "$(perm Group.ReadWrite.All)=Role" "$(perm Application.ReadWrite.OwnedBy)=Role" \
-  "$(perm AppRoleAssignment.ReadWrite.All)=Role" "$(perm Application.Read.All)=Role"
-az ad app permission admin-consent --id $DEPLOYER_APP_ID
-```
-
-Then add `"manage_entra": true` to the tfvars, update `TF_VARS_JSON` and apply.
-
-**Both options:** add the people:
-
-```bash
-az ad group member add --group sg-sbom-cps-admins --member-id $(az ad user show --id <upn> --query id -o tsv)
-```
-
-Put the platform admins in `sg-sbom-cps-admins`, and everyone else on the team who triages findings in `sg-sbom-cps-users`.
-
-### Step 18 — Switch to Entra sign-in
-
-**Who:** a member of `sg-sbom-cps-admins`. **Where:** browser.
-
-1. Open `$DT_UI` and sign in with **OpenID**. You should see Administration and every project.
-2. Ask a member of `sg-sbom-cps-users` to sign in. They should see every project, but no Administration menu.
-3. Suspend the local admin: Administration → Access Management → Managed Users → `admin` → **Suspended**. The password stays in Key Vault for recovery.
-4. Check Teams → Administrators → API Keys is empty. `first_setup.py` creates no key there, but deployments set up before 18 Nov 2026 left one behind; delete it.
-
----
-
-## After go-live
-
-- **Changing the platform:** open a pull request, merge it to `main` after review, and `cd.yml` runs plan and apply. Collector code changes deploy in the same run. Keep `~/sbom-terraform.tfvars.json` as the source for `TF_VARS_JSON`.
-- **Day to day:** [how-to-use](how-to-use.md) covers using Dependency-Track, rotating credentials (§7) and the failure runbook (§8).
-- **The old stack:** if the DefectDojo platform from `main` (`rg-security-platform`) was ever deployed, delete that resource group and its `security-platform.tfstate` state blob once this platform is in use.
+Applying by hand makes you Key Vault Administrator. If the pipeline applies later, that role moves to the pipeline identity.
 
 ## Tearing it down
 
 ```bash
-source ~/sbom-deploy.env
-terraform init && terraform destroy          # with the same tfvars, as the deployer or an Owner
-# Application Insights creates this action group itself, so Terraform doesn't remove it
-az monitor action-group delete -g $RG -n "Application Insights Smart Detection"
-# The resource group was created by hand in step 5
+terraform destroy -var-file=$HOME/sbom.tfvars.json
+az monitor action-group delete -g $RG -n "Application Insights Smart Detection"   # created by Azure, not Terraform
 az group delete -n $RG --yes
 ```
 
-Then remove what lives outside the resource group, if the platform is going for good:
-- **GitHub:**
-  - Uninstall and delete the `cps-sbom-collector` App.
-  - Detach `cps-sbom-baseline` (Org → Settings → Code security → Configurations). It does no harm left on.
-  - Delete the org's `DEPENDENCY_TRACK_URL` variable and `DEPENDENCY_TRACK_API_KEY` secret.
-- **Entra:** the deployer app from step 4, and the groups and Dependency-Track app registration from step 17.
-- **State:** the `sbom-platform.tfstate` blob, or the whole `$STATE_RG`.
+The Key Vault is kept soft-deleted for 90 days. A new deployment with the same name in that time recovers it, including its old secrets. That's harmless: `first_setup.py` replaces the old admin password, and Terraform resets the vault's firewall. If an apply fails at `ca-dtrack-api` with `unable to fetch secret`, delete that app (`az containerapp delete -g $RG -n ca-dtrack-api --yes`) and apply again.
 
-The Key Vault is soft-deleted with purge protection, so its name is reserved for 90 days. A redeploy with the same name recovers it automatically (`recover_soft_deleted_key_vaults`), with its old secrets:
-- **Its old firewall comes back too.** azurerm recovers the vault without applying `network_acls`. If the old vault had `Deny` (for example, one from the enterprise branch), the first apply fails at `ca-dtrack-api` with `unable to fetch secret 'db-password'`. The failed app is left in Azure but not in state, so delete it (`az containerapp delete -g $RG -n ca-dtrack-api --yes`) and apply again; that apply switches the vault to `Allow` and recreates the app.
-- **The old `dtrack-admin-password` comes back.** `first_setup.py` notices that it doesn't work on the new Dependency-Track and sets a new one.
-
-## Troubleshooting the first deployment
-
-| Symptom | Cause | Fix |
-|---|---|---|
-| `cd.yml` jobs stay *Queued* | No runner with the `$RUNNER` label | Check the label from step 1 matches a runner available to the repo |
-| `AADSTS700213` / `AADSTS70021` at Azure login | The federated credential subject doesn't match | It must be `repo:<org>/<repo>:ref:refs/heads/main`, matching `$GH_REPO` exactly (step 4). Runs from any other branch always fail here, by design |
-| `AuthorizationFailed` creating a role assignment | RBAC Administrator role or its condition missing | Re-run step 5 |
-| Plan fails: the storage account, Key Vault or Postgres name is taken | Globally unique names | Set `global_name_suffix` (step 9) |
-| The Function App lists no functions (`collector-deploy` fails at *Check the functions loaded*, or Projects shows only the org) | Code never deployed, or built with Mac or Windows wheels | Re-run `cd.yml` with `apply`, or the manual build in step 9 with its `--platform` flags. A `ModuleNotFoundError` in Application Insights confirms the wrong wheels |
-| *SBOM Platform Setup* fails at *Store the GitHub App private key* | `COLLECTOR_APP_PRIVATE_KEY` not set and no key in Key Vault | Set the secret (step 8) and run it again |
-| *SBOM Platform Setup* fails at *Start a collection run* | The collector code isn't deployed yet | Run `cd.yml` with `apply` first |
-| `Forbidden` from `az keyvault secret set` | No Secrets Officer role yet, or it hasn't applied | Step 11; wait a few minutes after granting |
-| Dependency-Track UI returns 403 | Your IP isn't in `allowed_ip_ranges` | Add your egress CIDR to the tfvars and apply (`curl -4 ifconfig.me` shows it) |
-| Dependency-Track UI loads but every page fails | The API isn't up yet, or crashed | `curl $DT_API/api/version`; `az containerapp logs show -g $RG -n ca-dtrack-api --tail 100` |
-| Host keys fail with 400, or timers never fire | `AzureWebJobsStorage` set to a key-based string | It must be empty (`collector.tf` sets it so); check the Function's Environment variables |
-| `enumerate_repos` logs a 401 | Wrong or missing `github-app-private-key` | Re-store the key (step 11), then restart (step 13) |
-| Every repo is `no-dependency-graph` | `cps-sbom-baseline` not applied yet, or the App was installed on selected repositories | Step 7; set the installation to All repositories |
-| Some repos are `no-dependency-graph` right after step 7 | GitHub builds a repo's graph a few minutes after the configuration attaches | Run step 14 again; repos whose last status isn't `ok` are always queued again. Otherwise the nightly run picks them up |
-| `security-config.sh` gets a 403 saying it needs `admin:org` | The token has only `write:org` | `gh auth refresh -h github.com -s admin:org` |
-| `ca-dtrack-api` fails with `unable to fetch secret 'db-password'` | A recovered Key Vault kept an old `Deny` firewall | See [Tearing it down](#tearing-it-down): delete the failed app and apply again |
+Outside Azure, remove these if the platform is going for good:
+- the GitHub App;
+- the `cps-sbom-baseline` configuration (Org → Settings → Code security);
+- the org's `DEPENDENCY_TRACK_*` variable and secret;
+- the deployer app and any Entra groups and app registration.

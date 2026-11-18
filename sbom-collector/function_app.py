@@ -1,11 +1,10 @@
-"""CPS SBOM collector: GitHub dependency-graph SBOMs for every repo in the
-CPS org -> Blob and Dependency-Track. Design: docs/adr/0001-team-sbom-platform.md."""
+"""SBOM collector: GitHub's dependency-graph SBOM for every repo in the org,
+archived to Blob and loaded into Dependency-Track."""
 import base64
 import datetime as dt
 import json
 import logging
 import os
-import pathlib
 import time
 from functools import cache, lru_cache
 
@@ -30,24 +29,12 @@ CRED = DefaultAzureCredential()  # user-assigned identity, picked by AZURE_CLIEN
 APP_ID = os.environ["GITHUB_APP_ID"]
 _tokens: dict = {}
 
-# ---------- Azure clients (managed identity everywhere) ----------
-# Local runs (poc/) set LOCAL_SECRETS_DIR and a SbomStorage connection string
-# for Azurite. Azure never sets either: there SbomStorage is identity-based
-# (SbomStorage__queueServiceUri and friends).
+# ---------- Azure clients ----------
 @lru_cache
 def _secret(name):
-    local = os.environ.get("LOCAL_SECRETS_DIR")
-    if local:  # one file per secret, named as in Key Vault
-        path = pathlib.Path(local, name)
-        if not path.is_file():
-            raise ResourceNotFoundError(f"{path} not found")
-        return path.read_text().strip()
     return SecretClient(os.environ["KEY_VAULT_URL"], CRED).get_secret(name).value
 
 def _storage(cls, service, **kw):
-    conn = os.environ.get("SbomStorage")
-    if conn:
-        return cls.from_connection_string(conn, **kw)
     return cls(f"https://{ACCOUNT}.{service}.core.windows.net", credential=CRED, **kw)
 
 @lru_cache
@@ -66,8 +53,7 @@ def _now():
     return dt.datetime.now(dt.UTC).isoformat()
 
 def _report(org, repo, status, count, detail=""):
-    """One line per repo per run, for Application Insights: kql/collector-status.kql
-    reads these, and the failure runbook looks up a repo's last one."""
+    """One log line per repo per run; kql/collector-status.kql reads these."""
     (logging.warning if status == "error" else logging.info)("sbom-result %s", json.dumps(
         {"Org": org, "Repo": repo, "Status": status, "ComponentCount": count, "Detail": detail}))
 
@@ -105,8 +91,7 @@ def _paged(url, token, key=None, params=None):
 # ---------- 1. Nightly enumeration (02:00 UTC; Flex Consumption has no time zone setting) ----------
 @app.timer_trigger(schedule="0 0 2 * * *", arg_name="timer", use_monitor=True)
 def enumerate_repos(timer: func.TimerRequest) -> None:
-    """Queues every repo the App can see. It is org-owned and installed only on
-    the CPS org, so in practice that is one installation."""
+    """Queues every repo the App can see that changed, plus a rolling 1/7 of the rest."""
     today = dt.datetime.now(dt.UTC).weekday()
     skipped = queued = 0
     for inst in _paged(f"{GH}/app/installations", _app_jwt()):
@@ -136,8 +121,7 @@ def _requeue(job, delay):
     _queue().send_message(json.dumps(job), visibility_timeout=int(delay))
 
 def _throttled(r, job):
-    """On a rate limit, park the job until the limit resets instead of failing it.
-    generate-report has its own bucket (dependency_sbom), so this fires there first."""
+    """On a rate limit, park the job until the limit resets instead of failing it."""
     if r.status_code in (403, 429) and (r.headers.get("retry-after") or r.headers.get("x-ratelimit-remaining") == "0"):
         reset = int(r.headers.get("x-ratelimit-reset", time.time() + 60))
         wait = int(r.headers.get("retry-after") or max(reset - time.time(), 60))
@@ -157,8 +141,7 @@ def collect_sbom(msg: func.QueueMessage) -> None:
     try:
         _collect(job)
     except Exception as e:
-        # Last attempt: record the failure before the host moves the message
-        # to sbom-work-poison, so the status query and repostate show it.
+        # Last attempt: record the failure before the message goes to the poison queue.
         if msg.dequeue_count >= MAX_DEQUEUE:
             _finish(job, "error", 0, f"{type(e).__name__}: {e}"[:500])
         raise
@@ -167,7 +150,7 @@ def _collect(job):
     org, repo = job["org"], job["repo"]
     token = _install_token(job["installation_id"])
 
-    # Step A: ask GitHub to build the SBOM (async API; the old sync endpoint goes 13 Nov 2026)
+    # Step A: ask GitHub to build the SBOM
     if "sbom_url" not in job:
         r = requests.get(f"{GH}/repos/{org}/{repo}/dependency-graph/sbom/generate-report",
                          headers=_h(token), timeout=30)

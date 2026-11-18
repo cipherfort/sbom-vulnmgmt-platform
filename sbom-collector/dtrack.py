@@ -1,13 +1,10 @@
-"""Small Dependency-Track 4.x REST client shared by the collector and
-ops/dtrack_admin.py. Endpoints checked against the 4.14.6 source."""
+"""Small Dependency-Track 4.x REST client used by the collector and ops/."""
 import requests
 
 
 class DependencyTrack:
     def __init__(self, base_url, api_key=None, timeout=30, token=None):
-        """Authenticates with an API key, or with token: a signed-in user's
-        session token (POST /user/login), which ops/first_setup.py uses so
-        that no admin key is left behind."""
+        """api_key, or token: a session token from POST /user/login."""
         self.base, self.timeout = base_url.rstrip("/"), timeout
         self.session = requests.Session()
         if token:

@@ -1,39 +1,39 @@
 output "dependency_track_url" {
-  description = "Dependency-Track frontend URL (limited to var.allowed_ip_ranges when set)"
+  description = "Dependency-Track UI"
   value       = "https://${azurerm_container_app.dtrack_ui.ingress[0].fqdn}"
 }
 
 output "dependency_track_api_url" {
-  description = "Dependency-Track API server URL — the DEPENDENCY_TRACK_URL variable for repos calling sbom-scan.yml, and what dtrack_admin.py talks to"
+  description = "Dependency-Track API (the DEPENDENCY_TRACK_URL for sbom-scan.yml)"
   value       = "https://${azurerm_container_app.dtrack_api.ingress[0].fqdn}"
 }
 
 output "resource_group_name" {
-  description = "rg-sbom-<env>; cd.yml and sbom-setup.yml read this and the names below rather than repeating them as repo variables"
+  description = "Resource group"
   value       = data.azurerm_resource_group.this.name
 }
 
 output "function_app_name" {
-  description = "Collector Function App, which cd.yml's collector-deploy job deploys to"
+  description = "Collector Function App"
   value       = azurerm_function_app_flex_consumption.collector.name
 }
 
 output "key_vault_name" {
-  description = "Key Vault for the GitHub App private key and the Dependency-Track API keys (added by hand or by ops/first_setup.py)"
+  description = "Key Vault"
   value       = azurerm_key_vault.this.name
 }
 
 output "sbom_storage_account" {
-  description = "Raw SBOM archive, work queue and state table"
+  description = "Collector storage account"
   value       = azurerm_storage_account.sbom.name
 }
 
 output "log_analytics_workspace" {
-  description = "Workspace holding the collector's Application Insights data and the platform's logs"
+  description = "Log Analytics workspace"
   value       = azurerm_log_analytics_workspace.this.name
 }
 
 output "dtrack_oidc_client_id" {
-  description = "Client ID Dependency-Track signs in with (empty until an Entra app exists)"
+  description = "Entra app client ID (empty without Entra)"
   value       = local.dtrack_oidc_client_id
 }

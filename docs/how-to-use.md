@@ -1,172 +1,96 @@
-# How to use — CPS SBOM platform (Dependency-Track)
+# How to use
 
-This guide covers day-to-day use of the platform, the Terraform CI path, container images, and what to do when something breaks. *Why* it is built this way: [ADR-0001](adr/0001-team-sbom-platform.md). *Deploying it*: [deployment runbook](deployment-runbook.md).
+SBOMs list every library and version a service runs, so treat this data as **OFFICIAL-SENSITIVE**. Give access to named people only, and don't export it outside the platform.
 
-**Data classification: OFFICIAL-SENSITIVE.** An SBOM lists every library and version a service runs, which tells an attacker where to aim. Access by named group only, and no export outside the platform without CPS sign-off.
+## Dependency-Track
 
----
+Sign in to the UI; the address is in the summary of the *SBOM Platform Setup* run. The UI only opens from the networks in `allowed_ip_ranges`.
 
-## Table of contents
-
-1. [Where things live](#1-where-things-live)
-2. [Operating model](#2-operating-model)
-3. [Dependency-Track](#3-dependency-track)
-4. [Terraform repos: `sbom-scan.yml`](#4-terraform-repos-sbom-scanyml)
-5. [Collector statuses](#5-collector-statuses)
-6. [Running the collector](#6-running-the-collector)
-7. [Rotating credentials](#7-rotating-credentials)
-8. [Failure runbook](#8-failure-runbook)
-9. [Container images and Bicep repos](#9-container-images-and-bicep-repos)
-
----
-
-## 1. Where things live
-
-```
-GitHub CPS org  ── dependency graph on every repo (cps-sbom-baseline)
-   │  cps-sbom-collector App (org-owned, read-only)
-   ▼
-func-sbom-<env>  enumerate_repos 02:00 UTC → sbom-work queue → collect_sbom
-   │  report_poison_depth every 15 min
-   ├─► Blob   stsbom<env>/sbom-raw/<org>/<repo>/<date>.spdx.json   history, 13 months
-   └─► Dependency-Track  <org>/<repo> under parent <org>           findings are worked here
-```
-
-Get the URLs with `terraform output dependency_track_url` (UI) and `dependency_track_api_url` (API). The UI only opens from `allowed_ip_ranges`.
-
-**Default branch only.** The SBOM shows what is on each repo's default branch, which is not necessarily what is deployed. Release-time attested SBOMs (§9) close that gap for services that adopt them.
-
-## 2. Operating model
-
-| Activity | CPS platform | CPS security | Repo owner |
-|---|---|---|---|
-| Run the collector and Dependency-Track | R/A | C | I |
-| Org security configuration (`cps-sbom-baseline`) | R/A | C | I |
-| Triage findings in a repo | I | C | R/A |
-| Set vulnerability and licence policies | C | R/A | C |
-| Incident lookup ("where is package X") | C | R/A | C |
-| Access reviews of the two Entra groups (quarterly) | R | A | I |
-
-| Service level | Level |
+| Project | What it is |
 |---|---|
-| Collection | Nightly. Changed repos no older than 24 hours; every repo no older than 7 days (rolling refresh) |
-| Critical finding triage by the repo owner | 5 working days |
-| Dependency-Track patching | Within 30 days of a new 4.x release; **within 7 days for a security release**, because the API is internet-facing |
+| `<org>` | Parent project, rolling up every repo |
+| `<org>/<repo>` | The repo's default branch, collected nightly |
+| `<org>/<repo>/terraform` | Terraform providers, from `sbom-scan.yml` |
 
-Policies are **warn only** for the first three months. Nothing here blocks a build.
+On the Projects page, tick **Show flat project view** to list every repo, or expand the org project.
 
-## 3. Dependency-Track
+- **Vulnerabilities** are matched continuously against NVD, OSV and, if `DT_ADVISORIES_TOKEN` is set, GitHub Advisories. A CVE published next month shows up without re-collecting anything.
+- **Triage** happens in a project's Audit tab: set an analysis state (exploitable, not affected, false positive and so on) and a reason.
+- **Policies** start as warnings only:
+  - a critical or high vulnerability;
+  - a restricted or unknown licence, in projects tagged `distributed`;
+  - a component 3 or more major versions behind.
 
-Sign in with your Entra account. Members of `sg-sbom-cps-users` see every project and can triage; members of `sg-sbom-cps-admins` can also change teams, policies and configuration.
+### Where do we use package X?
 
-| Project | Version | From |
-|---|---|---|
-| `<org>` | — | Parent collection project: rolls up the metrics of its children |
-| `<org>/<repo>` | default branch | The nightly collector (GitHub dependency graph) |
-| `<org>/<repo>/terraform` | `main` or `pr-<n>` | `sbom-scan.yml` in the repo's CI (Terraform providers) |
-
-- **Vulnerabilities**: matched continuously against NVD, GitHub Advisories and OSV. A CVE published next month shows up on today's SBOM without re-collecting.
-- **Audit**: set an *analysis state* (exploitable, not affected, false positive, …) with a justification. That is the triage record.
-- **Policy violations**: the starter policies are critical/high vulnerability (warn), restricted or unknown licence in a project tagged `distributed` (warn), and component 3+ major versions behind (info). Tag a project `distributed` if the service ships outside CPS.
-- **Notifications**: new vulnerabilities and policy violations go to the Teams channel, if `onboard-org` was given `--teams-webhook`.
-
-**Incident lookup: where do we use package X?**
-
-- **By package:** UI → Components → search by name (`log4j-core`) or by purl. Each result links to its project.
-- **By CVE:** UI → Vulnerabilities → search the ID → *Affected Projects*.
-- **From the CLI**, with any API key that has VIEW_PORTFOLIO:
+- **By package:** Components → search by name or purl.
+- **By CVE:** Vulnerabilities → search the ID → Affected Projects.
+- **From the command line**, with an API key that can view the portfolio:
   ```bash
-  curl -s -H "X-Api-Key: $KEY" "$DT_API/api/v1/component/identity?name=log4j-core" \
-    | jq -r '.[] | "\(.project.name)\t\(.name)\t\(.version)"'
-  curl -s -H "X-Api-Key: $KEY" "$DT_API/api/v1/vulnerability/source/NVD/vuln/CVE-2021-44228/projects" \
-    | jq -r '.[].name'
+  curl -s -H "X-Api-Key: $KEY" "$DT_API/api/v1/component/identity?name=log4j-core" | jq -r '.[].project.name'
+  curl -s -H "X-Api-Key: $KEY" "$DT_API/api/v1/vulnerability/source/NVD/vuln/CVE-2021-44228/projects" | jq -r '.[].name'
   ```
 
-Package names are the names GitHub's SBOM uses, for example `@azure/core-rest-pipeline`, `actions/checkout`, `log4j-core`. Use the purl to be exact.
+## The collector
 
-## 4. Terraform repos: `sbom-scan.yml`
+`enumerate_repos` runs at 02:00 UTC. It queues the repos that changed since their last good SBOM, plus a rolling seventh of the rest, so every repo is refreshed at least weekly. `collect_sbom` then fetches each SBOM, archives it to Blob and uploads it to Dependency-Track. GitHub allows 100 SBOMs an hour, so a large backlog takes hours to clear. That's expected.
 
-GitHub's dependency graph has no Terraform ecosystem, so the collector can't see providers. Terraform repos keep calling the reusable workflow. Every other ecosystem is collected centrally with no repo change.
-
-1. Set the variable `DEPENDENCY_TRACK_URL` (the API URL) and the secret `DEPENDENCY_TRACK_API_KEY` (the `ci-uploader` team's key, Key Vault secret `dtrack-ci-api-key`) once at org level. See [runbook step 15](deployment-runbook.md#step-15--test-the-terraform-path-sbom-scanyml).
-2. Copy [`examples/consumer-workflows/ci.yml`](../examples/consumer-workflows/ci.yml) and [`cd.yml`](../examples/consumer-workflows/cd.yml).
-
-`npm` is still accepted as `sbom_type`, but the collector already covers npm through the dependency graph, so use it only where a repo needs a CI-time SBOM.
-
-Inspect a Terraform SBOM locally:
-```bash
-npx --yes @cyclonedx/cdxgen@10 -t terraform -o bom.json .
-jq -r '.components[] | "\(.name) \(.version)"' bom.json
-```
-
-## 5. Collector statuses
-
-Every repo the collector handles gets one `sbom-result` line in Application Insights `appi-sbom-<env>`. It also gets a row in the `repostate` table, holding the last status. [`collector-status.kql`](../sbom-collector/kql/collector-status.kql) summarises the latest status per repo.
+Each repo's result is logged to Application Insights `appi-sbom-<env>`. [`collector-status.kql`](../sbom-collector/kql/collector-status.kql) summarises the latest result per repo.
 
 | Status | Meaning |
 |---|---|
-| `ok` | SBOM collected and loaded |
+| `ok` | Collected and loaded |
 | `skipped` | Archived, disabled or empty repo |
-| `no-dependency-graph` | GitHub returned 404: no manifests, or the repo isn't under `cps-sbom-baseline` |
-| `timeout` | GitHub's SBOM job wasn't ready after 20 polls |
-| `error` | Failed 5 times; the message is in `sbom-work-poison` |
+| `no-dependency-graph` | GitHub has no graph for the repo: it has no manifests, or `cps-sbom-baseline` isn't applied to it |
+| `timeout` | GitHub hadn't built the SBOM after 20 polls; the next run retries it |
+| `error` | Failed 5 times; the message is in the `sbom-work-poison` queue |
 
-To find one repo's last result:
+- **Run it now:** Actions → *SBOM Platform Setup*, with the restart option off.
+- **Re-collect one repo:** delete its row from the `repostate` table.
 
-```kusto
-traces
-| where message startswith "sbom-result " and message has '"Repo": "<repo>"'
-| top 5 by timestamp
-```
+Repos whose last result wasn't `ok` are always retried on the next run.
 
-## 6. Running the collector
+## Terraform repos
 
-- **Run enumeration now:** Portal → `func-sbom-<env>` → `enumerate_repos` → Test/Run, or the `curl` in [runbook step 14](deployment-runbook.md#step-14--run-the-first-collection).
-- **Force a repo:** delete its row from the `repostate` table; the next enumeration queues it.
-- **Rate limits:** `generate-report` has its own GitHub limit (`dependency_sbom`) of 100 an hour per org. Throttled jobs are parked on the queue until the limit resets, so a large backlog drains over hours. That is expected, not a failure.
-- **Logs:** Application Insights `appi-sbom-<env>`, and `FunctionAppLogs` in `log-sbom-<env>`.
-- **Local run:** [`poc/README.md`](../poc/README.md) runs the collector against real GitHub, with Dependency-Track and Azurite in Docker and no Azure needed.
-- **Tests:** `cd sbom-collector && .venv/bin/python -m pytest -q`. For Terraform: `terraform init -backend=false && terraform test`.
+GitHub's dependency graph has no Terraform support, so Terraform repos call [`sbom-scan.yml`](../.github/workflows/sbom-scan.yml). Copy [`examples/consumer-workflows/ci.yml`](../examples/consumer-workflows/ci.yml) and [`cd.yml`](../examples/consumer-workflows/cd.yml). The org-wide variable and secret they need are set up in the [runbook](deployment-runbook.md#optional-terraform-repos).
 
-## 7. Rotating credentials
+## Container images (optional)
 
-| Credential | Where | How |
+- [`container-sbom.yml`](../.github/workflows/container-sbom.yml) adds an image's packages to the repo's dependency graph, so the collector picks them up.
+- [`release-sbom-attest.yml`](../.github/workflows/release-sbom-attest.yml) signs a release SBOM.
+- [`image-scan.yml`](../.github/workflows/image-scan.yml) scans images with Trivy into the repo's Security tab.
+
+[`container-image.yml`](../examples/consumer-workflows/container-image.yml) shows the first two together.
+
+## Rotating credentials
+
+| Credential | Where it lives | How to rotate it |
 |---|---|---|
-| `cps-sbom-collector` private key | Key Vault `github-app-private-key` | Every 6 months: add a second key in the App settings. Put it in the `COLLECTOR_APP_PRIVATE_KEY` secret and run *SBOM Platform Setup* (it stores the key and restarts the Function App), or `az keyvault secret set --file` and restart by hand. Then delete the old key in GitHub |
-| Collector upload key | Key Vault `dtrack-api-key` (team `bom-uploader`) | Dependency-Track → Administration → Teams → `bom-uploader` → API Keys → regenerate; update the secret; restart the Function App |
-| CI upload key | Key Vault `dtrack-ci-api-key` → GitHub secret `DEPENDENCY_TRACK_API_KEY` | Regenerate, update both places |
-| Local admin password | Key Vault `dtrack-admin-password` | Only needed while `admin` is unsuspended; change it in the UI and update the secret |
-| Postgres admin password | Key Vault `postgres-admin-password` (Terraform-generated) | `terraform apply -replace=random_password.postgres_admin`. This restarts Dependency-Track with the new password; expect a brief outage |
+| GitHub App private key | Key Vault `github-app-private-key` | Every 6 months: generate a new key in the App settings, put it in the `COLLECTOR_APP_PRIVATE_KEY` secret, and run *SBOM Platform Setup*. Then delete the old key in GitHub. |
+| Collector API key | Key Vault `dtrack-api-key` | Regenerate it on the `bom-uploader` team in Dependency-Track, update the secret, and restart the Function App |
+| CI API key | Key Vault `dtrack-ci-api-key`, and the `DEPENDENCY_TRACK_API_KEY` secret | Regenerate it on the `ci-uploader` team and update both copies |
+| Admin password | Key Vault `dtrack-admin-password` | Change it in the UI and update the secret |
+| Postgres password | Key Vault `postgres-admin-password` | `terraform apply -replace=random_password.postgres_admin`; Dependency-Track restarts briefly |
 
-The collector caches secrets for the life of an instance; restart after any rotation. Because the API is internet-facing, rotate an API key at once if it may have leaked.
+The API is reachable from the internet, so rotate an API key straight away if it might have leaked. Patch Dependency-Track within 7 days of a security release by changing `dtrack_image_tag`.
 
-## 8. Failure runbook
+## Troubleshooting
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| **Poison-queue alert** (`sbom-poison-queue-not-empty`) | GitHub 5xx, a malformed SBOM, or Dependency-Track down | Find the repo's `error` line (§5; `Detail` has the exception) and the App Insights exception. Fix the cause, then move the message back to `sbom-work` (Storage Explorer), or delete its `repostate` row so the next run re-queues it. |
-| **`sbom-enumerate-not-succeeded` alert** | Bad or rotated private key, App uninstalled, Function host down | Check `enumerate_repos` failures in App Insights. A 401 on `access_tokens` means the wrong key in `github-app-private-key`: see the next row. |
-| HTTP 401 creating installation tokens | Private key rotated or wrong in Key Vault | Update `github-app-private-key`; restart the Function App |
-| HTTP 404 on every repo | App uninstalled, or installed on selected repositories | Org → Settings → GitHub Apps → `cps-sbom-collector` → Configure → **All repositories** |
-| Many `no-dependency-graph` results | Repos outside `cps-sbom-baseline`, or no manifests | Check the configuration's repository list; repos with no manifests are expected |
-| Many `timeout` results | GitHub's async SBOM jobs are slow | Check githubstatus.com; raise the 20-poll cap in `function_app.py` if it persists |
-| Backlog in `sbom-work` that drains slowly | `dependency_sbom` rate limit | Expected after a refresh of many repos; see §6 |
-| Collector fails with "parent project … not visible to this API key" | Portfolio access control was turned on | Turn it off (Administration → Access Management → Portfolio Access Control), or re-run `dtrack_admin.py bootstrap`, which turns it off |
-| Dependency-Track UI returns 403 | Your IP isn't in `allowed_ip_ranges` | Add the CIDR to the tfvars and apply |
-| Dependency-Track slow or out of memory | Portfolio grew past 8 GiB container memory | Move `ca-dtrack-api` to a Dedicated workload profile with more memory (add a `workload_profile` block in `dependency_track.tf`); move Postgres to `GP_Standard_D2ds_v5` |
-| `sbom-scan.yml` upload fails with 401 or 403 | Wrong or rotated `DEPENDENCY_TRACK_API_KEY` | Copy `dtrack-ci-api-key` to the GitHub secret again |
-
-## 9. Container images and Bicep repos
-
-**Image components in the inventory (optional).** Call [`container-sbom.yml`](../.github/workflows/container-sbom.yml) from the default-branch build with the image digest. Syft submits the image SBOM to the dependency submission API, and the collector picks it up the next night. See [`examples/consumer-workflows/container-image.yml`](../examples/consumer-workflows/container-image.yml).
-
-**Release-time attested SBOMs (optional).** [`release-sbom-attest.yml`](../.github/workflows/release-sbom-attest.yml) signs the release SBOM with an attestation bound to the image digest. Verify it with:
-```bash
-gh attestation verify oci://<image>@<digest> --owner <org> --predicate-type https://spdx.dev/Document/v2.3
-```
-
-**Image CVEs in GHAS.** [`image-scan.yml`](../.github/workflows/image-scan.yml) runs Trivy against an explicit image list and uploads SARIF to the repo's Security tab. The caller must grant `security-events: write`. It never fails a job on findings.
-
-**Bicep.** A Bicep file has no package-manager dependencies, so there is no SBOM to collect. Keep Checkov/PSRule for misconfiguration.
-- For registry-published Bicep modules, the control is provenance: pin to a digest, restrict trusted registries, and review in PR.
-- For container images a template references, use the workflows above.
+| Workflow jobs stay *Queued* | No runner with the label in the workflows | Use a label your org has (runbook step 1) |
+| `AADSTS700213` at Azure login | The run wasn't from `main`, or the federated credential doesn't match | Run from `main`; the subject must be `repo:<org>/<repo>:ref:refs/heads/main` |
+| `AuthorizationFailed` creating a role assignment | The deployer's RBAC Administrator role is missing | Runbook step 2 |
+| Plan fails because a name is taken | Key Vault, storage, Postgres and Function names are global | Set `global_name_suffix` |
+| The Function lists no functions; the org project has no repos | The code wasn't deployed, or was built with the wrong wheels | Run `cd.yml` with `apply`. A `ModuleNotFoundError` in Application Insights means the wrong wheels. |
+| The UI returns 403 | Your IP isn't in `allowed_ip_ranges` | Add it to `TF_VARS_JSON` and apply |
+| The UI loads, but pages fail | The API is starting or has crashed | `curl $DT_API/api/version`; `az containerapp logs show -g $RG -n ca-dtrack-api --tail 100` |
+| `security-config.sh` gets a 403 | The token lacks `admin:org` | `gh auth refresh -h github.com -s admin:org` |
+| Every repo is `no-dependency-graph` | The baseline isn't applied, or the App is installed on selected repos only | Run `security-config.sh`; install the App on all repositories |
+| **Alert:** `sbom-enumerate-not-succeeded`, or a 401 on `access_tokens` | Wrong App key, App uninstalled, or the Function is down | Update `COLLECTOR_APP_PRIVATE_KEY` and run *SBOM Platform Setup*; check the App installation |
+| 403s from GitHub mentioning an IP allow list | The org restricts which IPs can call GitHub | The Function has no fixed IP. Ask an org owner for an exception, or add a NAT gateway. |
+| **Alert:** `sbom-poison-queue-not-empty` | A repo failed 5 times | Find its `error` line (the `Detail` column), fix the cause, then delete its `repostate` row |
+| Many `timeout` results | GitHub's SBOM jobs are slow | Check githubstatus.com; they're retried the next night |
+| "Parent project not visible to this API key" | Portfolio access control was turned on | Turn it off, or run `dtrack_admin.py bootstrap` again |
+| Dependency-Track slow or out of memory | The portfolio outgrew 8 GiB | Give `ca-dtrack-api` a bigger workload profile, and Postgres a General Purpose SKU |
+| `sbom-scan.yml` upload gets a 401 | `DEPENDENCY_TRACK_API_KEY` is wrong or rotated | Copy `dtrack-ci-api-key` to it again |

@@ -4,8 +4,7 @@ locals {
   dtrack_oidc_client_id = var.manage_entra ? azuread_application.dtrack[0].client_id : var.dtrack_oidc_client_id
   dtrack_oidc_issuer    = "https://login.microsoftonline.com/${data.azurerm_client_config.current.tenant_id}/v2.0"
 
-  # Only set once there is an Entra app to sign in with — until then the
-  # local admin account is the only way in (first-login step, README).
+  # Entra sign-in, once there is an app registration.
   dtrack_api_oidc_env = local.dtrack_oidc_client_id == "" ? {} : {
     ALPINE_OIDC_ENABLED              = "true"
     ALPINE_OIDC_ISSUER               = local.dtrack_oidc_issuer
@@ -22,11 +21,7 @@ locals {
   }
 }
 
-# No VNet: Azure runs the environment's network, and each app's ingress is
-# on the internet. Workload profiles (rather than the legacy
-# Consumption-only mode) are what allow a single container to have
-# 4 vCPU / 8 GiB on the Consumption profile — the old Consumption-only
-# environment capped containers at 2 vCPU / 4 GiB.
+# Workload profiles, so the API container can have 4 vCPU / 8 GiB.
 resource "azurerm_container_app_environment" "this" {
   name                       = "cae-sbom-${local.env}"
   resource_group_name        = data.azurerm_resource_group.this.name
@@ -49,9 +44,7 @@ resource "azurerm_container_app_environment_storage" "dtrack_data" {
   access_mode                  = "ReadWrite"
 }
 
-# User-assigned (not system-assigned) so the Key Vault role exists before
-# the app is created — a system-assigned identity can't be granted access
-# until the app exists, and the app can't start without the secret.
+# User-assigned, so its Key Vault role exists before the app first starts.
 resource "azurerm_user_assigned_identity" "dtrack" {
   name                = "id-dtrack-${local.env}"
   resource_group_name = data.azurerm_resource_group.this.name
@@ -85,8 +78,7 @@ resource "azurerm_container_app" "dtrack_api" {
   }
 
   template {
-    # Exactly one replica: the API server keeps search indexes and its
-    # task queue on local state, so it must not scale out.
+    # The API server keeps local state, so it must not scale out.
     min_replicas = 1
     max_replicas = 1
 
@@ -107,9 +99,7 @@ resource "azurerm_container_app" "dtrack_api" {
         path = "/data"
       }
 
-      # Heap below the 8 GiB container limit, leaving room for metaspace,
-      # threads and Lucene's off-heap buffers. Dependency-Track wants 4.5 GB
-      # or more with the NVD mirror on, so this doesn't drop to 2 vCPU / 4 GiB.
+      # Leaves headroom under the 8 GiB container limit.
       env {
         name  = "EXTRA_JAVA_OPTIONS"
         value = "-Xmx6g"
@@ -154,10 +144,8 @@ resource "azurerm_container_app" "dtrack_api" {
     }
   }
 
-  # Open to the internet, with no IP restriction: the collector Function has
-  # no fixed outbound IP to allow, and the UI calls this API from each
-  # person's browser. Every endpoint except /api/version needs an API key
-  # or a signed-in session.
+  # Not IP-restricted: the collector has no fixed outbound IP, and browsers
+  # call it from the UI. Every call except /api/version needs a key or a session.
   ingress {
     external_enabled = true
     target_port      = 8080
@@ -172,7 +160,6 @@ resource "azurerm_container_app" "dtrack_api" {
   depends_on = [azurerm_role_assignment.dtrack_kv_secrets_user]
 }
 
-# Stateless SPA — no DB, no secrets.
 resource "azurerm_container_app" "dtrack_ui" {
   name                         = "ca-dtrack-ui"
   resource_group_name          = data.azurerm_resource_group.this.name
@@ -206,8 +193,6 @@ resource "azurerm_container_app" "dtrack_ui" {
     }
   }
 
-  # Limited to var.allowed_ip_ranges, as on main. This only hides the login
-  # page; the data is behind the API above.
   ingress {
     external_enabled = true
     target_port      = 8080

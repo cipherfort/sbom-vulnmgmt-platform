@@ -1,7 +1,5 @@
 locals {
-  # Entra-ID-only connections (the storage account has shared keys off).
-  # __credential/__clientId make the Functions host use the user-assigned
-  # identity rather than looking for a system-assigned one.
+  # Makes the Functions host connect to storage with the user-assigned identity.
   collector_identity_conn = {
     credential = "managedidentity"
     clientId   = azurerm_user_assigned_identity.collector.client_id
@@ -9,9 +7,8 @@ locals {
 
   collector_app_settings = merge(
     {
-      # azurerm writes AzureWebJobsStorage as a connection string with an empty
-      # AccountKey, which wins over the identity settings below: the host then
-      # can't reach storage, so host keys and timer leases fail. Empty = unset.
+      # azurerm otherwise writes a key-based string here that overrides the
+      # identity settings, and the host can't reach storage.
       AzureWebJobsStorage              = ""
       AzureWebJobsStorage__accountName = azurerm_storage_account.sbom.name
       SbomStorage__queueServiceUri     = azurerm_storage_account.sbom.primary_queue_endpoint
@@ -19,8 +16,6 @@ locals {
     { for k, v in local.collector_identity_conn : "AzureWebJobsStorage__${k}" => v },
     { for k, v in local.collector_identity_conn : "SbomStorage__${k}" => v },
     {
-      # DefaultAzureCredential in function_app.py picks the user-assigned
-      # identity from this.
       AZURE_CLIENT_ID = azurerm_user_assigned_identity.collector.client_id
 
       APPLICATIONINSIGHTS_AUTHENTICATION_STRING = "ClientId=${azurerm_user_assigned_identity.collector.client_id};Authorization=AAD"
@@ -40,9 +35,7 @@ resource "azurerm_user_assigned_identity" "collector" {
   tags                = local.tags
 }
 
-# Least privilege. Blob Data Owner
-# (not Contributor) is what the Functions host needs for its blob leases on
-# AzureWebJobsStorage.
+# Blob Data Owner is what the Functions host needs for its leases.
 resource "azurerm_role_assignment" "collector" {
   for_each = {
     kv_secrets_user = { scope = azurerm_key_vault.this.id, role = "Key Vault Secrets User" }
@@ -65,7 +58,6 @@ resource "azurerm_application_insights" "collector" {
   application_type    = "other"
   tags                = local.tags
 
-  # Telemetry is sent with the managed identity only.
   local_authentication_enabled = false
 }
 
@@ -93,17 +85,10 @@ resource "azurerm_function_app_flex_consumption" "collector" {
   storage_authentication_type       = "UserAssignedIdentity"
   storage_user_assigned_identity_id = azurerm_user_assigned_identity.collector.id
 
-  # The cap applies per function, so collect_sbom never runs on more than
-  # 4 instances x (batchSize 8 + newBatchThreshold 4) = 48 concurrent
-  # GitHub calls — well under GitHub's ~100 concurrent-request secondary
-  # limit, leaving room for other automation.
+  # 4 instances x 12 queue messages = 48 concurrent GitHub calls at most.
   maximum_instance_count = 4
   instance_memory_in_mb  = 2048
 
-  # No VNet integration: storage, Key Vault and Dependency-Track are all
-  # reached on their public endpoints, with Entra ID or an API key. The CD
-  # job deploys through the public endpoint (Entra auth, basic publishing
-  # credentials off). The app has no HTTP triggers.
   public_network_access_enabled                  = true
   webdeploy_publish_basic_authentication_enabled = false
   https_only                                     = true
@@ -119,8 +104,7 @@ resource "azurerm_function_app_flex_consumption" "collector" {
     application_insights_connection_string = azurerm_application_insights.collector.connection_string
   }
 
-  # The provider hides AzureWebJobsStorage when it reads settings back, so the
-  # empty value above would show as a change on every plan. Created with it anyway.
+  # The provider doesn't read this setting back, so it would show as a change on every plan.
   lifecycle {
     ignore_changes = [app_settings["AzureWebJobsStorage"]]
   }

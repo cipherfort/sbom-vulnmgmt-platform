@@ -1,73 +1,45 @@
 # CPS SBOM Platform
 
-An Azure-hosted collector pulls GitHub's dependency-graph SBOM for every repository in the CPS GitHub org each night. The SBOMs go to two places:
-- **OWASP Dependency-Track**, where CPS sees components, licences and vulnerabilities, triages findings, and searches for a package across every repo.
-- **Blob storage**, for 13 months of history.
+Every night, an Azure Function collects GitHub's dependency-graph SBOM for each repository in the org and loads it into [OWASP Dependency-Track](https://dependencytrack.org/). Dependency-Track then shows the team every component, licence and known vulnerability across all repos, and answers "where do we use package X?".
 
-**Status: not deployed in production.** This version was test-deployed end to end on 11 Nov 2026 to a personal subscription and GitHub org, then destroyed:
-- **Worked:** the 38-resource apply; the UI limited to `allowed_ip_ranges` and the API refusing calls without a key; `first_setup.py` from a laptop; `security-config.sh` on all 9 repos; and all 9 repos collected into Dependency-Track under the org parent, with the component search working.
-- **Not yet exercised:** the pipeline (`cd.yml` and `sbom-setup.yml`; their steps are the commands the test ran by hand), `sbom-scan.yml`, Entra sign-in, and vulnerability counts after the first full NVD/OSV download.
+No repository needs any changes. Terraform repos can optionally add one CI job, because GitHub's dependency graph doesn't cover Terraform.
 
-The bugs the test found are fixed, and the [runbook](docs/deployment-runbook.md) covers them.
-
-| Read | For |
-|---|---|
-| [ADR-0001](docs/adr/0001-team-sbom-platform.md) | The decision, the security trade-offs, and what the build learned |
-| [Deployment runbook](docs/deployment-runbook.md) | Every step from a fresh copy of this repo to nightly collection, with commands |
-| [How to use](docs/how-to-use.md) | Day-to-day use, the Terraform CI path, rotating credentials, failure runbook |
-
----
-
-## Architecture
+## How it works
 
 ```
-GitHub: CPS org ── cps-sbom-baseline (dependency graph on, every repo)
-                ── cps-sbom-collector App (org-owned, read-only, all repositories)
-        │ list repos · generate-report → fetch-report (async)
-        ▼
-rg-sbom-<env> (UK South, public endpoints, no VNet)
-  func-sbom-<env> (Flex Consumption, Python 3.11)
-    enumerate_repos 02:00 UTC ─► sbom-work queue ─► collect_sbom (re-queues while GitHub builds)
-    report_poison_depth every 15 min
-        │
-        ├─► stsbom<env>/sbom-raw         raw SPDX, versioned, Cool 30 d, delete 13 months
-        └─► Dependency-Track 4.14        cae-sbom-<env> · ca-dtrack-api (open, key-protected)
-              <org> parent                ca-dtrack-ui (allowed_ip_ranges) · psql-dtrack-<env>
-               ├─ <org>/<repo>            (collector)
-               └─ <org>/<repo>/terraform  (sbom-scan.yml)
-  log-sbom-<env> · appi-sbom-<env> · alerts to alert_email
+GitHub org ── dependency graph on for every repo (cps-sbom-baseline)
+     │        collector GitHub App (read-only)
+     ▼
+func-sbom-<env>   02:00 UTC: list repos → queue → fetch each SBOM
+     ├─► Blob storage        raw SBOMs, kept 13 months
+     └─► Dependency-Track    one project per repo, under a parent project for the org
 ```
 
-Every Azure hop uses a managed identity or Entra ID. The only long-lived secrets are the GitHub App private key and the Dependency-Track API keys, all in `kv-sbom-<env>`.
+Everything runs in one resource group, `rg-sbom-<env>`, in UK South. The Azure services use public endpoints, and every caller authenticates with Entra ID or an API key. The only long-lived secrets are the GitHub App key and the Dependency-Track API keys, all in Key Vault.
 
-## What is where
+## Repository layout
 
-| Path | What |
+| Path | Contents |
 |---|---|
-| `main.tf`, `variables.tf`, `outputs.tf`, `versions.tf` | Root module. Reads the pre-created `rg-sbom-<env>`; checks it is in a UK region |
-| `keyvault.tf`, `storage.tf`, `postgres.tf` | Key Vault, collector storage, Dependency-Track `/data` share, Postgres |
-| `dependency_track.tf` | Container Apps environment (workload profiles), API server and frontend |
-| `collector.tf` | Function App, its identity and roles, Application Insights |
-| `monitoring.tf` | Log Analytics workspace, action group, poison-queue and enumeration alerts, diagnostic settings |
-| `entra.tf` | Optional (`manage_entra`): the two Entra groups and the Dependency-Track app registration |
-| `tests/plan.tftest.hcl` | Full plan against mocked providers (`terraform test`) |
-| `sbom-collector/` | The Function App: `function_app.py`, `convert.py` (SPDX → CycloneDX), `dtrack.py`, tests, the App Insights status query |
-| `sbom-collector/ops/` | `first_setup.py` (first Dependency-Track login and setup) and `dtrack_admin.py` (teams, keys, policies, org parent) |
-| `poc/` | Local proof of concept: the collector against real GitHub, with Dependency-Track and Azurite in Docker ([poc/README.md](poc/README.md)) |
-| `scripts/github/security-config.sh` | Creates and applies the `cps-sbom-baseline` org security configuration |
-| `.github/workflows/` | `cd.yml` (Terraform + collector deploy), `sbom-setup.yml` (first-time Dependency-Track setup and first collection), `sbom-collector-ci.yml`, and the reusable `sbom-scan.yml`, `image-scan.yml`, `container-sbom.yml`, `release-sbom-attest.yml` |
+| `*.tf` | Terraform for the whole platform |
+| `sbom-collector/` | The Function App code, its tests, and `ops/` scripts for setting up Dependency-Track |
+| `scripts/github/security-config.sh` | Turns on the dependency graph for every repo in the org |
+| `.github/workflows/cd.yml` | Deploys Terraform and the collector code |
+| `.github/workflows/sbom-setup.yml` | One-off setup after the first deploy |
+| `.github/workflows/sbom-scan.yml` | Reusable workflow for Terraform repos |
+| `.github/workflows/image-scan.yml`, `container-sbom.yml`, `release-sbom-attest.yml` | Optional reusable workflows for container images |
+| `examples/consumer-workflows/` | How other repos call the reusable workflows |
 
-## Deploying it
+## Documentation
 
-Follow the [deployment runbook](docs/deployment-runbook.md). It needs no landing zone: a subscription, a resource group, and an org owner on GitHub. Every step has its commands and a check.
+- [Deployment runbook](docs/deployment-runbook.md): deploying from scratch.
+- [How to use](docs/how-to-use.md): finding packages and vulnerabilities, running the collector, rotating credentials, troubleshooting.
+- [ADR-0001](docs/0001-team-sbom-platform.md): why it's built this way.
 
-Two things catch people out:
-- **The pipeline deploys only from `main`, with no approval step.** The deployer's federated credential subject is `repo:<org>/<repo>:ref:refs/heads/main`, so runs from other branches can't sign in to Azure. Whatever merges to `main` is applied, so protect `main` with required reviews (runbook step 8).
-- **The deployer needs more than Contributor.** It also needs Role Based Access Control Administrator, conditioned, on `rg-sbom-<env>`. See runbook step 5.
+## Development
 
-## Known gaps
-
-- **The Dependency-Track API is internet-facing**, protected by API keys and sign-in. See ADR-0001 for why, and the alternative if that isn't acceptable.
-- **One replica of Dependency-Track.** A dashboard outage during patching is acceptable; the data is safe in Postgres and Blob and can be replayed.
-- **Default branch only.** The SBOM shows the default branch, not what is deployed. `release-sbom-attest.yml` covers services that adopt it.
-- **Rate-limited collection.** GitHub allows 100 SBOMs an hour per org, so an org of a few hundred repos takes a few hours on its first night.
+```bash
+cd sbom-collector && python3.11 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
+.venv/bin/ruff check . && .venv/bin/python -m pytest -q
+cd .. && terraform init -backend=false && terraform test
+```

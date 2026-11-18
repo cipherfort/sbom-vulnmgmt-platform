@@ -1,15 +1,11 @@
-"""One-off Dependency-Track setup, run by CPS. Idempotent: safe to re-run.
-ops/first_setup.py runs both commands for a new deployment.
+"""Dependency-Track setup. Safe to re-run; first_setup.py runs both commands.
 
   export DTRACK_URL=https://ca-dtrack-api.<env-domain>
-  export DTRACK_ADMIN_API_KEY=...  # team with ACCESS_MANAGEMENT, SYSTEM_CONFIGURATION, POLICY_MANAGEMENT
-  #   or DTRACK_ADMIN_TOKEN=...    # an admin's session token (first_setup.py passes this)
-  export GITHUB_ADVISORIES_TOKEN=...       # read-only GitHub token for the GitHub Advisories mirror (bootstrap only)
+  export DTRACK_ADMIN_API_KEY=...       # or DTRACK_ADMIN_TOKEN, an admin session token
+  export GITHUB_ADVISORIES_TOKEN=...    # optional, for the GitHub Advisories source
 
   python ops/dtrack_admin.py bootstrap --key-vault-url https://kv-sbom-prd.vault.azure.net/
-  python ops/dtrack_admin.py onboard-org cps --teams-webhook https://...
-
-See docs/deployment-runbook.md (step 12) and docs/how-to-use.md.
+  python ops/dtrack_admin.py onboard-org <org> [--teams-webhook https://...]
 """
 import argparse
 import json
@@ -20,12 +16,10 @@ import sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 from dtrack import DependencyTrack  # noqa: E402
 
-# The two teams people sign in to, named after their Entra groups so the OIDC
-# group mappings line up (entra.tf creates the groups with these names).
+# Named after the Entra groups, so sign-in maps people to these teams.
 CPS_ADMINS, CPS_USERS = "sg-sbom-cps-admins", "sg-sbom-cps-users"
 
-# Team -> permissions. Portfolio access control stays off: one team uses this
-# instance, so everyone with VIEW_PORTFOLIO sees every project.
+# Portfolio access control is off, so VIEW_PORTFOLIO shows every project.
 TEAMS = {
     "bom-uploader": ["BOM_UPLOAD", "PROJECT_CREATION_UPLOAD", "VIEW_PORTFOLIO", "PORTFOLIO_MANAGEMENT"],
     "ci-uploader": ["BOM_UPLOAD", "PROJECT_CREATION_UPLOAD", "VIEW_PORTFOLIO"],
@@ -35,9 +29,8 @@ TEAMS = {
     CPS_USERS: ["VIEW_PORTFOLIO", "VIEW_VULNERABILITY", "VULNERABILITY_ANALYSIS",
                 "VIEW_POLICY_VIOLATION", "POLICY_VIOLATION_ANALYSIS"],
 }
-# Team -> Key Vault secret its generated API key goes to. The collector reads
-# dtrack-api-key; ci-uploader's key is copied to GitHub as the
-# DEPENDENCY_TRACK_API_KEY secret for sbom-scan.yml.
+# Where each team's API key is stored: the collector reads dtrack-api-key;
+# dtrack-ci-api-key becomes the DEPENDENCY_TRACK_API_KEY secret for sbom-scan.yml.
 KEY_SECRETS = {"bom-uploader": "dtrack-api-key", "ci-uploader": "dtrack-ci-api-key"}
 
 OSV_ECOSYSTEMS = ["npm", "PyPI", "Maven", "Go", "NuGet", "RubyGems", "crates.io", "Packagist", "Pub", "Hex",
@@ -75,13 +68,6 @@ def ensure_oidc_mapping(dt, group_name, team_uuid):
 
 def store_key(team_name, key, key_vault_url):
     secret = KEY_SECRETS[team_name]
-    local = os.environ.get("LOCAL_SECRETS_DIR")
-    if local:  # local runs (poc/): one file per secret, as the collector reads them
-        path = pathlib.Path(local, secret)
-        path.touch(mode=0o600)
-        path.write_text(key)
-        print(f"Stored {team_name} API key in {path}")
-        return
     if not key_vault_url:
         print(f"{team_name} API key (store as Key Vault secret {secret}; shown once): {key}", file=sys.stderr)
         return

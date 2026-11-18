@@ -1,23 +1,13 @@
 #!/usr/bin/env bash
-# Create (or find) the org code security configuration cps-sbom-baseline,
-# attach it to every repository in the org and make it the default for new
-# ones, so every repo has a dependency graph for the collector to export.
+# Turns on the dependency graph for every repo in the org: creates the code
+# security configuration cps-sbom-baseline, attaches it to every repo without
+# a configuration, and makes it the default for new repos.
 #
-#   scripts/github/security-config.sh --org <org>
-#   scripts/github/security-config.sh --org <org> --include-configured
+#   scripts/github/security-config.sh --org <org> [--include-configured]
 #
-# Needs an org owner or security manager, with a token that has admin:org
-# (`gh auth refresh -s admin:org`; the docs say write:org, but the API asks for
-# admin:org). Read-only until it prints "Applying".
-#
-# Two deliberate departures from "set everything":
-#   * Paid features are not_set, not disabled. With enforcement on, "disabled"
-#     would switch GHAS code scanning / secret protection OFF in repos that use
-#     them today. not_set leaves each repo's existing choice alone.
-#   * The attach uses scope all_without_configurations, so repos already on
-#     another configuration keep it. The script lists those configurations
-#     first; add the three settings below to them, or re-run with
-#     --include-configured to overwrite them.
+# Needs an org owner and a token with admin:org (gh auth refresh -s admin:org).
+# Paid features are left not_set, so repos keep whatever they use today.
+# --include-configured also replaces other configurations already attached.
 set -euo pipefail
 
 NAME=cps-sbom-baseline
@@ -26,7 +16,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --org) ORG="$2"; shift 2 ;;
     --include-configured) INCLUDE_CONFIGURED=true; shift ;;
-    -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,10p' "$0"; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -42,7 +32,7 @@ ID=$(api --paginate "/orgs/$ORG/code-security/configurations" --jq ".[] | select
 if [[ -z "$ID" ]]; then
   body='{
   "name": "'"$NAME"'",
-  "description": "CPS SBOM platform: every repo has a dependency graph (docs/adr/0001-team-sbom-platform.md).",
+  "description": "CPS SBOM platform: every repo has a dependency graph (docs/0001-team-sbom-platform.md).",
   "dependency_graph": "enabled",
   "dependency_graph_autosubmit_action": "enabled",
   "dependabot_alerts": "enabled",
@@ -51,9 +41,7 @@ if [[ -z "$ID" ]]; then
   "secret_protection": "not_set",
   "enforcement": "enforced"
 }'
-  # Orgs without the unbundled Advanced Security plan reject the
-  # code_security / secret_protection fields outright, even as not_set. They
-  # have nothing to switch off, so retry without them.
+  # Orgs without Advanced Security reject these two fields, even as not_set.
   if ! ID=$(api -X POST "/orgs/$ORG/code-security/configurations" --input - --jq .id <<<"$body" 2>"${TMPDIR:-/tmp}/sbom-config.err"); then
     grep -q "unbundled Advanced Security" "${TMPDIR:-/tmp}/sbom-config.err" || { cat "${TMPDIR:-/tmp}/sbom-config.err" >&2; exit 1; }
     echo "No Advanced Security plan in $ORG: creating without the code_security / secret_protection settings"
