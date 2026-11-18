@@ -13,12 +13,11 @@ resource "azurerm_postgresql_flexible_server" "dtrack" {
 
   public_network_access_enabled = true
 
-  zone                         = "1"
   backup_retention_days        = 14
   geo_redundant_backup_enabled = false
 
   lifecycle {
-    # Azure can move the server to another zone after a failover.
+    # No zone is set, so Azure places the server wherever there is capacity.
     ignore_changes = [zone]
   }
 }
