@@ -1,8 +1,20 @@
 name: SBOM Platform CD
 
+# Terraform plan/apply, then the collector code. Pushes to main apply after an
+# environment reviewer approves; Actions > Run workflow runs a plan or apply
+# by hand (use that after changing the TF_VARS_JSON secret). First-time
+# Dependency-Track setup is sbom-setup.yml, run once after the first apply.
+# Every job runs in the security-platform environment, which the deployer's
+# federated credential subject names (deployment runbook step 4).
+
 on:
   push:
     branches: [main]
+    paths:
+      - "*.tf"
+      - ".terraform.lock.hcl"
+      - "sbom-collector/**"
+      - ".github/workflows/cd.yml"
 
   workflow_dispatch:
     inputs:
@@ -14,7 +26,6 @@ on:
 
 env:
   TERRAFORM_VERSION: "1.11.4"
-  TF_PLUGIN_CACHE_DIR: ~/.terraform.d/plugin-cache
   ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
   ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
   ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
@@ -29,6 +40,7 @@ jobs:
     name: Terraform (${{ github.event.inputs.action || 'apply' }})
     runs-on: cps-ubuntu-latest-private
 
+    # One Terraform run at a time, and never cancel one mid-apply.
     concurrency:
       group: security-platform
       cancel-in-progress: false
@@ -36,20 +48,17 @@ jobs:
     environment:
       name: security-platform
 
+    outputs:
+      resource_group: ${{ steps.names.outputs.resource_group }}
+      function_app: ${{ steps.names.outputs.function_app }}
+
     steps:
       - uses: actions/checkout@v4
-
-      - uses: actions/cache@v4
-        with:
-          path: ${{ env.TF_PLUGIN_CACHE_DIR }}
-          key: tf-plugin-${{ runner.os }}-${{ env.TERRAFORM_VERSION }}-${{ hashFiles('**/.terraform.lock.hcl') }}
-          restore-keys: tf-plugin-${{ runner.os }}-${{ env.TERRAFORM_VERSION }}-
-
-      - run: mkdir -p "${TF_PLUGIN_CACHE_DIR}"
 
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false # keeps `terraform output -raw` clean
 
       - uses: azure/login@v2
         with:
@@ -59,38 +68,43 @@ jobs:
 
       # GitHub App ID, alert mailbox, UI IP ranges etc. — none secret, but
       # environment-specific, so they live in one secret rather than in git.
-      # Shape: terraform.tfvars.example as JSON.
+      # Shape: the JSON form at the bottom of terraform.tfvars.example.
       - name: Write terraform.tfvars.json
         env:
           TF_VARS_JSON: ${{ secrets.TF_VARS_JSON }}
         run: printf '%s' "$TF_VARS_JSON" > terraform.tfvars.json
 
       - name: Terraform Init
-        run: terraform init -no-color
+        run: terraform init -no-color -input=false
 
       - name: Terraform Plan
-        id: plan
-        run: terraform plan -no-color -out=tfplan
+        run: |
+          set -o pipefail
+          terraform plan -no-color -input=false -out=tfplan | tee plan.txt
 
       - name: Terraform Apply
         if: github.event_name == 'push' || github.event.inputs.action == 'apply'
-        run: terraform apply -no-color -auto-approve tfplan
+        run: terraform apply -no-color -input=false -auto-approve tfplan
 
-      - name: Post deployment summary
+      - name: Read resource names
+        id: names
+        if: github.event_name == 'push' || github.event.inputs.action == 'apply'
+        run: |
+          echo "resource_group=$(terraform output -raw resource_group_name)" >> "$GITHUB_OUTPUT"
+          echo "function_app=$(terraform output -raw function_app_name)" >> "$GITHUB_OUTPUT"
+
+      - name: Summary
         if: always()
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const status = '${{ steps.plan.outcome }}' === 'success' ? '✅ Success' : '❌ Failed';
-            await core.summary
-              .addHeading(`SBOM Platform ${status}`)
-              .addTable([
-                [{data: 'Field', header: true}, {data: 'Value', header: true}],
-                ['SHA',       '${{ github.sha }}'],
-                ['Actor',     '@${{ github.actor }}'],
-                ['Timestamp', new Date().toISOString()],
-              ])
-              .write();
+        env:
+          ACTION: ${{ github.event.inputs.action || 'apply' }}
+          STATUS: ${{ job.status }}
+        run: |
+          {
+            echo "### SBOM Platform ${ACTION}: ${STATUS}"
+            grep -E '^(Plan:|No changes)' plan.txt 2>/dev/null || echo "No plan was produced."
+            echo
+            echo "Commit \`${GITHUB_SHA}\`, run by @${GITHUB_ACTOR}"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   collector-deploy:
     name: Deploy SBOM collector
@@ -105,6 +119,10 @@ jobs:
     environment:
       name: security-platform
 
+    env:
+      RG: ${{ needs.terraform.outputs.resource_group }}
+      FUNC: ${{ needs.terraform.outputs.function_app }}
+
     steps:
       - uses: actions/checkout@v4
 
@@ -112,11 +130,20 @@ jobs:
         with:
           python-version: "3.11" # must match the Function App runtime_version
 
-      # Dependencies are installed here, not by a remote build, so what is
-      # deployed is exactly what this run installed.
+      # The same package the runbook builds by hand: the code without what
+      # .funcignore lists, plus Linux x86-64 wheels for Python 3.11. Without
+      # the --platform flags a runner of another OS or architecture builds
+      # wheels the Function can't load, and it then lists no functions.
       - name: Package
-        working-directory: sbom-collector
-        run: pip install --target .python_packages/lib/site-packages -r requirements.txt
+        run: |
+          PKG="$RUNNER_TEMP/collector"
+          rm -rf "$PKG" && mkdir -p "$PKG"
+          rsync -a --exclude-from=sbom-collector/.funcignore --exclude=.funcignore --exclude=.python_packages \
+            sbom-collector/ "$PKG/"
+          python -m pip install -q --target "$PKG/.python_packages/lib/site-packages" -r sbom-collector/requirements.txt \
+            --platform manylinux2014_x86_64 --platform manylinux_2_17_x86_64 --python-version 3.11 \
+            --implementation cp --only-binary=:all:
+          python -c "import shutil, sys; shutil.make_archive(sys.argv[1], 'zip', sys.argv[2])" "$RUNNER_TEMP/collector" "$PKG"
 
       - uses: azure/login@v2
         with:
@@ -125,11 +152,18 @@ jobs:
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Deploy
-        # Pinned by commit SHA, as with trivy-action in image-scan.yml.
-        uses: Azure/functions-action@c5060b3b8bb1ebbcb531abd00c822ecbaa8ea656 # v1.5.7
-        with:
-          app-name: ${{ vars.FUNCTION_APP_NAME }}
-          package: sbom-collector
-          sku: flexconsumption
-          respect-funcignore: true
-          remote-build: false
+        run: az functionapp deployment source config-zip -g "$RG" -n "$FUNC" --src "$RUNNER_TEMP/collector.zip" -o none
+
+      # An upload that the Function can't load still "succeeds", so check the
+      # three functions are there.
+      - name: Check the functions loaded
+        run: |
+          for _ in $(seq 1 20); do
+            names=$(az functionapp function list -g "$RG" -n "$FUNC" --query "[].name" -o tsv 2>/dev/null || true)
+            if [ "$(grep -cE 'enumerate_repos|collect_sbom|report_poison_depth' <<<"$names")" -eq 3 ]; then
+              echo "Loaded:"; echo "$names"; exit 0
+            fi
+            sleep 15
+          done
+          echo "::error::$FUNC lists no collector functions 5 minutes after the deploy. Check Application Insights for ModuleNotFoundError (docs/deployment-runbook.md, troubleshooting)."
+          exit 1

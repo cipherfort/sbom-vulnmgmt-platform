@@ -8,8 +8,13 @@ output "dependency_track_api_url" {
   value       = "https://${azurerm_container_app.dtrack_api.ingress[0].fqdn}"
 }
 
+output "resource_group_name" {
+  description = "rg-sbom-<env>; cd.yml and sbom-setup.yml read this and the names below rather than repeating them as repo variables"
+  value       = data.azurerm_resource_group.this.name
+}
+
 output "function_app_name" {
-  description = "Collector Function App — the FUNCTION_APP_NAME repo variable for cd.yml's collector-deploy job"
+  description = "Collector Function App, which cd.yml's collector-deploy job deploys to"
   value       = azurerm_function_app_flex_consumption.collector.name
 }
 

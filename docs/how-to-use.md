@@ -132,7 +132,7 @@ traces
 
 | Credential | Where | How |
 |---|---|---|
-| `cps-sbom-collector` private key | Key Vault `github-app-private-key` | Every 6 months: add a second key in the App settings, `az keyvault secret set --file`, restart the Function App, then delete the old key in GitHub |
+| `cps-sbom-collector` private key | Key Vault `github-app-private-key` | Every 6 months: add a second key in the App settings. Put it in the `COLLECTOR_APP_PRIVATE_KEY` secret and run *SBOM Platform Setup* (it stores the key and restarts the Function App), or `az keyvault secret set --file` and restart by hand. Then delete the old key in GitHub |
 | Collector upload key | Key Vault `dtrack-api-key` (team `bom-uploader`) | Dependency-Track → Administration → Teams → `bom-uploader` → API Keys → regenerate; update the secret; restart the Function App |
 | CI upload key | Key Vault `dtrack-ci-api-key` → GitHub secret `DEPENDENCY_TRACK_API_KEY` | Regenerate, update both places |
 | Local admin password | Key Vault `dtrack-admin-password` | Only needed while `admin` is unsuspended; change it in the UI and update the secret |

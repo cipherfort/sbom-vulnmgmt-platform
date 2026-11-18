@@ -3,6 +3,7 @@ ops/first_setup.py runs both commands for a new deployment.
 
   export DTRACK_URL=https://ca-dtrack-api.<env-domain>
   export DTRACK_ADMIN_API_KEY=...  # team with ACCESS_MANAGEMENT, SYSTEM_CONFIGURATION, POLICY_MANAGEMENT
+  #   or DTRACK_ADMIN_TOKEN=...    # an admin's session token (first_setup.py passes this)
   export GITHUB_ADVISORIES_TOKEN=...       # read-only GitHub token for the GitHub Advisories mirror (bootstrap only)
 
   python ops/dtrack_admin.py bootstrap --key-vault-url https://kv-sbom-prd.vault.azure.net/
@@ -179,7 +180,10 @@ def main():
     o.add_argument("--teams-webhook", help="Teams incoming webhook URL for the team's channel")
     args = ap.parse_args()
 
-    dt = DependencyTrack(os.environ["DTRACK_URL"], os.environ["DTRACK_ADMIN_API_KEY"])
+    token = os.environ.get("DTRACK_ADMIN_TOKEN")
+    if not token and not os.environ.get("DTRACK_ADMIN_API_KEY"):
+        ap.error("set DTRACK_ADMIN_API_KEY or DTRACK_ADMIN_TOKEN")
+    dt = DependencyTrack(os.environ["DTRACK_URL"], os.environ.get("DTRACK_ADMIN_API_KEY"), token=token)
     {"bootstrap": bootstrap, "onboard-org": onboard_org}[args.cmd](dt, args)
 
 

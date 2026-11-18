@@ -49,3 +49,10 @@ def test_upload_uses_parent_uuid(dt):
     assert body == {"projectName": "cps/svc", "projectVersion": "main", "autoCreate": True,
                     "parentUUID": "parent-uuid", "bom": "Ym9t"}
 
+
+
+def test_session_token_replaces_api_key():
+    by_key = DependencyTrack("https://dtrack.test", "key").session.headers
+    by_token = DependencyTrack("https://dtrack.test", token="jwt").session.headers
+    assert by_key["X-Api-Key"] == "key" and "Authorization" not in by_key
+    assert by_token["Authorization"] == "Bearer jwt" and "X-Api-Key" not in by_token

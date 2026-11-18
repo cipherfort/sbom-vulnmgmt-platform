@@ -1,0 +1,153 @@
+name: SBOM Platform Setup
+
+# Deployment runbook steps 11-14 in CI: run once after cd.yml's first apply,
+# and again after rotating the GitHub App key. Safe to re-run.
+#   1. Stores the COLLECTOR_APP_PRIVATE_KEY secret in Key Vault.
+#   2. ops/first_setup.py: admin password, teams, upload keys, policies,
+#      vulnerability sources, the org's parent project. No admin API key is
+#      created, and no key or password is printed.
+#   3. Restarts the collector and the Dependency-Track API, so both pick up
+#      the new keys and settings.
+#   4. Starts the first collection.
+#
+# Secrets:   AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID (as cd.yml)
+#            COLLECTOR_APP_PRIVATE_KEY  the App's .pem; optional once it's in Key Vault
+#            DT_ADVISORIES_TOKEN        optional read-only token for the GitHub Advisories mirror
+# Variable:  SBOM_ORG                   optional; defaults to this repo's org
+
+on:
+  workflow_dispatch:
+    inputs:
+      restart:
+        description: "Restart the collector and the Dependency-Track API afterwards"
+        type: boolean
+        default: true
+      collect:
+        description: "Start a collection run afterwards"
+        type: boolean
+        default: true
+
+env:
+  TERRAFORM_VERSION: "1.11.4"
+  ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+  ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+  ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+  ARM_USE_OIDC: true
+  # The Python scripts sign in with the az login below, never a runner VM's
+  # own managed identity.
+  AZURE_TOKEN_CREDENTIALS: AzureCliCredential
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  setup:
+    name: Set up Dependency-Track and the collector
+    runs-on: cps-ubuntu-latest-private
+
+    # Never alongside a Terraform run.
+    concurrency:
+      group: security-platform
+      cancel-in-progress: false
+
+    environment:
+      name: security-platform
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Read resource names from Terraform
+        run: |
+          terraform init -no-color -input=false >/dev/null
+          {
+            echo "RG=$(terraform output -raw resource_group_name)"
+            echo "KV=$(terraform output -raw key_vault_name)"
+            echo "FUNC=$(terraform output -raw function_app_name)"
+            echo "DT_API=$(terraform output -raw dependency_track_api_url)"
+            echo "DT_UI=$(terraform output -raw dependency_track_url)"
+          } >> "$GITHUB_ENV"
+
+      - name: Store the GitHub App private key
+        env:
+          APP_KEY: ${{ secrets.COLLECTOR_APP_PRIVATE_KEY }}
+        run: |
+          if [ -n "$APP_KEY" ]; then
+            umask 077
+            printf '%s\n' "$APP_KEY" > "$RUNNER_TEMP/app.pem"
+            az keyvault secret set --vault-name "$KV" -n github-app-private-key --file "$RUNNER_TEMP/app.pem" -o none
+            rm -f "$RUNNER_TEMP/app.pem"
+            echo "Stored COLLECTOR_APP_PRIVATE_KEY in $KV as github-app-private-key"
+          elif az keyvault secret show --vault-name "$KV" -n github-app-private-key --query id -o tsv >/dev/null 2>&1; then
+            echo "COLLECTOR_APP_PRIVATE_KEY not set; github-app-private-key is already in $KV, so leaving it"
+          else
+            echo "::error::Set the COLLECTOR_APP_PRIVATE_KEY secret to the App's .pem (runbook step 8), or store it in $KV by hand (step 11)"
+            exit 1
+          fi
+
+      - name: Wait for Dependency-Track
+        run: |
+          # The first start creates the database schema and takes minutes.
+          for _ in $(seq 1 60); do
+            curl -fsS "$DT_API/api/version" 2>/dev/null | grep -q '"version"' && { curl -sS "$DT_API/api/version"; echo; exit 0; }
+            sleep 15
+          done
+          echo "::error::$DT_API/api/version did not answer within 15 minutes"; exit 1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up Dependency-Track (ops/first_setup.py)
+        env:
+          ORG: ${{ vars.SBOM_ORG || github.repository_owner }}
+          GITHUB_ADVISORIES_TOKEN: ${{ secrets.DT_ADVISORIES_TOKEN }}
+        run: |
+          python -m pip install -q -r sbom-collector/requirements.txt
+          DTRACK_URL="$DT_API" KV_URL="https://$KV.vault.azure.net/" python sbom-collector/ops/first_setup.py
+
+      - name: Restart the collector and the Dependency-Track API
+        if: inputs.restart
+        run: |
+          az functionapp restart -g "$RG" -n "$FUNC" -o none
+          REV=$(az containerapp revision list -g "$RG" -n ca-dtrack-api --query "[?properties.active].name | [0]" -o tsv)
+          az containerapp revision restart -g "$RG" -n ca-dtrack-api --revision "$REV" -o none
+          echo "Restarted $FUNC and revision $REV"
+
+      - name: Start a collection run
+        if: inputs.collect
+        run: |
+          HOST=$(az functionapp show -g "$RG" -n "$FUNC" --query properties.defaultHostName -o tsv)
+          MASTER=$(az functionapp keys list -g "$RG" -n "$FUNC" --query masterKey -o tsv)
+          echo "::add-mask::$MASTER"
+          # The host may still be starting after the restart.
+          for _ in $(seq 1 20); do
+            code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "https://$HOST/admin/functions/enumerate_repos" \
+              -H "x-functions-key: $MASTER" -H 'Content-Type: application/json' -d '{}' || true)
+            [ "$code" = 202 ] && { echo "enumerate_repos started"; exit 0; }
+            sleep 15
+          done
+          echo "::error::enumerate_repos did not start (last HTTP $code). Has cd.yml deployed the collector code?"; exit 1
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### SBOM Platform setup: ${{ job.status }}"
+            echo "- Dependency-Track UI: ${DT_UI:-unknown} (from allowed_ip_ranges only)"
+            echo "- Sign in as \`admin\`; the password is Key Vault secret \`dtrack-admin-password\` in \`${KV:-the vault}\`."
+            echo "  Reading it needs Key Vault Secrets Officer (runbook step 11)."
+            echo "- Results arrive over the next hour: run \`sbom-collector/kql/collector-status.kql\` in Application Insights."
+            echo "- Terraform repos: copy \`dtrack-ci-api-key\` to the \`DEPENDENCY_TRACK_API_KEY\` secret (runbook step 15)."
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -20,11 +20,11 @@ name: Reusable Container Image Scan
 # Container Instances, ...) have real CVE data even though the Bicep file
 # itself has no package-manager dependency tree.
 #
-# Findings go to GitHub's Security tab only (SARIF upload; GHAS Enterprise is
-# already licensed and gives PR-native annotations). DefectDojo has been
-# removed — see ADR-0001. For the image's *components* in Dependency-Track,
-# use container-sbom.yml, which submits the image
-# SBOM to the dependency graph the collector already reads.
+# Findings go to the calling repo's Security tab (SARIF upload, with PR
+# annotations). On private and internal repos that needs GitHub Code
+# Security; without it the upload step fails. For the image's *components*
+# in Dependency-Track, use container-sbom.yml, which submits the image SBOM
+# to the dependency graph the collector already reads.
 #
 # image_refs is intentionally an explicit list, not auto-discovered from
 # .bicep files — resource shapes that carry an image reference vary too

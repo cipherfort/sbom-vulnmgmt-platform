@@ -11,7 +11,8 @@ name: Reusable Release SBOM Attestation
 #         contents: read
 #         id-token: write       # Sigstore signing
 #         attestations: write   # store the attestation on the repo
-#         packages: write       # only with push_to_registry on GHCR
+#         packages: write       # always: the job asks for it, and a called workflow
+#                               # can't have more than its caller grants
 #       uses: sg-cloud-platform/cps-security-platform-infra/.github/workflows/release-sbom-attest.yml@main
 #       with:
 #         image_name: ghcr.io/org/app

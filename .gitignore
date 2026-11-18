@@ -1,5 +1,7 @@
 .terraform/
-.terraform.lock.hcl
+# Only the root module's lock file is committed
+**/.terraform.lock.hcl
+!/.terraform.lock.hcl
 *.tfstate
 *.tfstate.*
 *.tfplan

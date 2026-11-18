@@ -73,7 +73,7 @@ Four things in the code are specific to where this repo was built:
 |---|---|---|
 | Repo path `sg-cloud-platform/cps-security-platform-infra` | Workflow header comments | Harmless, but misleading |
 | Repo name `cps-security-platform-infra` | The `repo` tag in `main.tf`, a comment in `test-sbom-scan.yml` | Resources are tagged with the wrong repo |
-| Runner label `cps-ubuntu-latest-private` | `cd.yml`, `sbom-collector-ci.yml`, `sbom-scan.yml`, `image-scan.yml`, `container-sbom.yml`, `release-sbom-attest.yml`, `.github/actionlint.yaml` | Jobs queue forever if your org has no runner with that label |
+| Runner label `cps-ubuntu-latest-private` | `cd.yml`, `sbom-setup.yml`, `sbom-collector-ci.yml`, `sbom-scan.yml`, `image-scan.yml`, `container-sbom.yml`, `release-sbom-attest.yml`, `.github/actionlint.yaml` | Jobs queue forever if your org has no runner with that label |
 | State backend `rg-tfstate-security-platform` / `stsecplatstate001` | `versions.tf` | `terraform init` fails or writes to someone else's account |
 
 Any runner with internet access works. Every endpoint the jobs reach (Azure, Key Vault, the Dependency-Track API) is public. `ubuntu-latest` is fine unless your org requires self-hosted runners.
@@ -267,14 +267,20 @@ Optionally, validate locally. This needs no Azure access:
 terraform init -backend=false && terraform validate && terraform test
 ```
 
-Set the secrets, the variable and the environment:
+Set the secrets and the environment. The pipeline reads every resource name from Terraform, so no name needs setting here:
 
 ```bash
 gh secret set AZURE_CLIENT_ID       -R $GH_REPO --body $DEPLOYER_APP_ID
 gh secret set AZURE_TENANT_ID       -R $GH_REPO --body $TENANT
 gh secret set AZURE_SUBSCRIPTION_ID -R $GH_REPO --body $SUB
 gh secret set TF_VARS_JSON          -R $GH_REPO < terraform.tfvars.json
-gh variable set FUNCTION_APP_NAME   -R $GH_REPO --body $FUNC
+
+# For the SBOM Platform Setup workflow (step 11): the App's private key from step 6,
+# and optionally the read-only GitHub Advisories token
+gh secret set COLLECTOR_APP_PRIVATE_KEY -R $GH_REPO < <path-to>.private-key.pem
+read -rs T && gh secret set DT_ADVISORIES_TOKEN -R $GH_REPO --body "$T" && unset T
+# Only if the org to collect isn't the org this repo is in:
+# gh variable set SBOM_ORG -R $GH_REPO --body $ORG
 
 # Required reviewers for every apply. For a team, use {"type": "Team", "id": <team id>}.
 gh api -X PUT repos/$GH_REPO/environments/security-platform --input - <<JSON
@@ -282,11 +288,11 @@ gh api -X PUT repos/$GH_REPO/environments/security-platform --input - <<JSON
 JSON
 ```
 
-`FUNCTION_APP_NAME` is set now from the known name, so the first apply can deploy the collector code in the same run.
+Now delete the `.pem`, including any copy in Downloads. The GitHub secret is the copy the pipeline uses.
 
-**Check:** `gh secret list -R $GH_REPO` shows four secrets.
+**Check:** `gh secret list -R $GH_REPO` shows `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `TF_VARS_JSON` and `COLLECTOR_APP_PRIVATE_KEY`, plus `DT_ADVISORIES_TOKEN` if you set it.
 
-**UI alternative:** the repo → Settings → Secrets and variables → Actions for the secrets and the variable; Settings → Environments → New environment `security-platform` → Required reviewers.
+**UI alternative:** the repo → Settings → Secrets and variables → Actions for the secrets (paste the whole `.pem`, BEGIN and END lines included); Settings → Environments → New environment `security-platform` → Required reviewers, and under *Deployment branches* allow only `main`.
 
 ---
 
@@ -315,11 +321,12 @@ gh run watch $RUN -R $GH_REPO
 
 The run asks for approval twice: once for `terraform`, once for `collector-deploy`. Postgres and the Container Apps environment are the slow parts, so allow 20–40 minutes.
 
+`collector-deploy` builds the collector package, uploads it, and then checks that the Function lists its three functions. If it doesn't, the job fails rather than leaving an empty Function App. After the first apply, pushes to `main` that change `*.tf`, the lock file or `sbom-collector/` run plan and apply by themselves, still after a reviewer approves. Documentation changes don't trigger a run.
+
 If the plan fails because a name is taken (the Key Vault, storage accounts and Postgres server need globally unique names):
 1. Set `SFX` in `~/sbom-deploy.env`.
 2. Add `"global_name_suffix"` to the tfvars and update `TF_VARS_JSON`.
-3. Re-set `FUNCTION_APP_NAME`.
-4. Run the plan again.
+3. Run the plan again.
 
 **UI alternative:** Actions → *SBOM Platform CD* → Run workflow, choose `plan` or `apply`.
 
@@ -378,6 +385,13 @@ az functionapp show -g $RG -n $FUNC --query "{state:properties.state, host:prope
 
 **Who:** subscription Owner grants the role; platform engineer stores the key. **Where:** anywhere with `az`.
 
+> **With the pipeline, steps 11–14 are one workflow run.** Grant the role below; people need it to read the admin password later. Then run **SBOM Platform Setup** ([`sbom-setup.yml`](../.github/workflows/sbom-setup.yml)), and a reviewer approves it:
+> ```bash
+> gh workflow run sbom-setup.yml -R $GH_REPO
+> sleep 10; gh run watch $(gh run list -R $GH_REPO -w sbom-setup.yml -L 1 --json databaseId -q '.[0].databaseId') -R $GH_REPO
+> ```
+> It stores `COLLECTOR_APP_PRIVATE_KEY` in Key Vault, waits for Dependency-Track, runs `first_setup.py` (step 12), restarts both apps (step 13) and starts the first collection (step 14). It runs as the deployer, which Terraform makes Key Vault Administrator, and prints no key or password. Then go to step 14's **Check**. The commands below are the same work by hand.
+
 The deployer can't grant this role; its condition doesn't allow it. Grant it to a group of CPS platform admins rather than to individuals. Use PIM if you have it.
 
 ```bash
@@ -386,7 +400,7 @@ KV_ID=$(az keyvault show -n $KV --query id -o tsv)
 az role assignment create --assignee-object-id <platform-admins-group-object-id> --assignee-principal-type Group \
   --role "Key Vault Secrets Officer" --scope $KV_ID
 
-# Wait a few minutes for the role to apply, then:
+# By hand only: wait a few minutes for the role to apply, then
 az keyvault secret set --vault-name $KV -n github-app-private-key --file <path-to>.private-key.pem --output none
 ```
 
@@ -413,7 +427,7 @@ cd ..
 
 [`ops/first_setup.py`](../sbom-collector/ops/first_setup.py) does what an admin would otherwise do in the browser:
 1. Changes the default `admin` / `admin` password to a random one and stores it in Key Vault as `dtrack-admin-password`.
-2. Creates a temporary Administrators API key. Step 18 deletes it.
+2. Signs in as `admin` and uses that session for the next two steps, so no admin API key is created.
 3. Runs `dtrack_admin.py bootstrap`:
    - turns on the NVD, OSV and GitHub Advisories sources;
    - creates the teams `bom-uploader`, `ci-uploader`, `sg-sbom-cps-admins` and `sg-sbom-cps-users`;
@@ -606,7 +620,7 @@ Put the platform admins in `sg-sbom-cps-admins`, and everyone else on the team w
 1. Open `$DT_UI` and sign in with **OpenID**. You should see Administration and every project.
 2. Ask a member of `sg-sbom-cps-users` to sign in. They should see every project, but no Administration menu.
 3. Suspend the local admin: Administration → Access Management → Managed Users → `admin` → **Suspended**. The password stays in Key Vault for recovery.
-4. Delete the temporary API key from step 12: Teams → Administrators → API Keys.
+4. Check Teams → Administrators → API Keys is empty. `first_setup.py` creates no key there, but deployments set up before 18 Nov 2026 left one behind; delete it.
 
 ---
 
@@ -647,7 +661,9 @@ The Key Vault is soft-deleted with purge protection, so its name is reserved for
 | `AADSTS700213` / `AADSTS70021` at Azure login | The federated credential subject doesn't match | It must be `repo:<org>/<repo>:environment:security-platform`, matching `$GH_REPO` exactly (step 4) |
 | `AuthorizationFailed` creating a role assignment | RBAC Administrator role or its condition missing | Re-run step 5 |
 | Plan fails: the storage account, Key Vault or Postgres name is taken | Globally unique names | Set `global_name_suffix` (step 9) |
-| `collector-deploy` can't find the app | `FUNCTION_APP_NAME` doesn't match | `gh variable set FUNCTION_APP_NAME --body $FUNC` |
+| The Function App lists no functions (`collector-deploy` fails at *Check the functions loaded*, or Projects shows only the org) | Code never deployed, or built with Mac or Windows wheels | Re-run `cd.yml` with `apply`, or the manual build in step 9 with its `--platform` flags. A `ModuleNotFoundError` in Application Insights confirms the wrong wheels |
+| *SBOM Platform Setup* fails at *Store the GitHub App private key* | `COLLECTOR_APP_PRIVATE_KEY` not set and no key in Key Vault | Set the secret (step 8) and run it again |
+| *SBOM Platform Setup* fails at *Start a collection run* | The collector code isn't deployed yet | Run `cd.yml` with `apply` first |
 | `Forbidden` from `az keyvault secret set` | No Secrets Officer role yet, or it hasn't applied | Step 11; wait a few minutes after granting |
 | Dependency-Track UI returns 403 | Your IP isn't in `allowed_ip_ranges` | Add your egress CIDR to the tfvars and apply (`curl -4 ifconfig.me` shows it) |
 | Dependency-Track UI loads but every page fails | The API isn't up yet, or crashed | `curl $DT_API/api/version`; `az containerapp logs show -g $RG -n ca-dtrack-api --tail 100` |

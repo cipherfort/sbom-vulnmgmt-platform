@@ -1,7 +1,8 @@
 """Deployment runbook step 12 without a browser: change Dependency-Track's
-default admin password, keep it in Key Vault, create a temporary
-Administrators API key, then run dtrack_admin.py bootstrap and onboard-org.
-Safe to re-run.
+default admin password, keep it in Key Vault, sign in as admin, then run
+dtrack_admin.py bootstrap and onboard-org with that session. No admin API
+key is created. Safe to re-run; the SBOM Platform Setup workflow
+(.github/workflows/sbom-setup.yml) runs it in CI.
 
   export DTRACK_URL=https://ca-dtrack-api.<env-domain>
   export KV_URL=https://kv-sbom-prd.vault.azure.net/
@@ -10,6 +11,7 @@ Safe to re-run.
   python ops/first_setup.py
 
 Runs as you (az login), so you need Key Vault Secrets Officer on the vault.
+In CI it runs as the deployer, which Terraform makes Key Vault Administrator.
 """
 import os
 import pathlib
@@ -52,15 +54,8 @@ if not pw:
 login = requests.post(f"{API}/user/login", data={"username": "admin", "password": pw}, timeout=30)
 print("Admin login:", login.status_code)
 login.raise_for_status()
-auth = {"Authorization": f"Bearer {login.text}"}
 
-teams = requests.get(f"{API}/team", headers=auth, timeout=30)
-teams.raise_for_status()
-admins = next(t for t in teams.json() if t["name"] == "Administrators")
-key = requests.put(f"{API}/team/{admins['uuid']}/key", headers=auth, timeout=30)
-key.raise_for_status()
-print("Temporary Administrators API key created (delete it after Entra sign-in works)")
-
-env = dict(os.environ, DTRACK_ADMIN_API_KEY=key.json()["key"])
+env = dict(os.environ, DTRACK_ADMIN_TOKEN=login.text)
+env.pop("DTRACK_ADMIN_API_KEY", None)
 for args in (["bootstrap", "--key-vault-url", KV_URL], ["onboard-org", ORG]):
     subprocess.run([sys.executable, str(ADMIN), *args], env=env, check=True)

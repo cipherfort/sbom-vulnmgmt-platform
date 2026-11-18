@@ -4,10 +4,16 @@ import requests
 
 
 class DependencyTrack:
-    def __init__(self, base_url, api_key, timeout=30):
+    def __init__(self, base_url, api_key=None, timeout=30, token=None):
+        """Authenticates with an API key, or with token: a signed-in user's
+        session token (POST /user/login), which ops/first_setup.py uses so
+        that no admin key is left behind."""
         self.base, self.timeout = base_url.rstrip("/"), timeout
         self.session = requests.Session()
-        self.session.headers["X-Api-Key"] = api_key
+        if token:
+            self.session.headers["Authorization"] = f"Bearer {token}"
+        else:
+            self.session.headers["X-Api-Key"] = api_key
 
     def call(self, method, path, ok=(), **kw):
         """Request /api/v1/<path>; raises on HTTP errors except those in ok."""

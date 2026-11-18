@@ -6,7 +6,7 @@ An Azure-hosted collector pulls GitHub's dependency-graph SBOM for every reposit
 
 **Status: not deployed in production.** This version was test-deployed end to end on 11 Nov 2026 to a personal subscription and GitHub org, then destroyed:
 - **Worked:** the 38-resource apply; the UI limited to `allowed_ip_ranges` and the API refusing calls without a key; `first_setup.py` from a laptop; `security-config.sh` on all 9 repos; and all 9 repos collected into Dependency-Track under the org parent, with the component search working.
-- **Not yet exercised:** `cd.yml`, `sbom-scan.yml`, Entra sign-in, and vulnerability counts after the first full NVD/OSV download.
+- **Not yet exercised:** the pipeline (`cd.yml` and `sbom-setup.yml`; their steps are the commands the test ran by hand), `sbom-scan.yml`, Entra sign-in, and vulnerability counts after the first full NVD/OSV download.
 
 The bugs the test found are fixed, and the [runbook](docs/deployment-runbook.md) covers them.
 
@@ -55,7 +55,7 @@ Every Azure hop uses a managed identity or Entra ID. The only long-lived secrets
 | `sbom-collector/ops/` | `first_setup.py` (first Dependency-Track login and setup) and `dtrack_admin.py` (teams, keys, policies, org parent) |
 | `poc/` | Local proof of concept: the collector against real GitHub, with Dependency-Track and Azurite in Docker ([poc/README.md](poc/README.md)) |
 | `scripts/github/security-config.sh` | Creates and applies the `cps-sbom-baseline` org security configuration |
-| `.github/workflows/` | `cd.yml` (Terraform + collector deploy), `sbom-collector-ci.yml`, and the reusable `sbom-scan.yml`, `image-scan.yml`, `container-sbom.yml`, `release-sbom-attest.yml` |
+| `.github/workflows/` | `cd.yml` (Terraform + collector deploy), `sbom-setup.yml` (first-time Dependency-Track setup and first collection), `sbom-collector-ci.yml`, and the reusable `sbom-scan.yml`, `image-scan.yml`, `container-sbom.yml`, `release-sbom-attest.yml` |
 
 ## Deploying it
 

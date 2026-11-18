@@ -6,6 +6,7 @@ on:
       - "sbom-collector/**"
       - "poc/**"
       - "*.tf"
+      - ".terraform.lock.hcl"
       - "tests/*.tftest.hcl"
       - ".github/workflows/sbom-collector-ci.yml"
   push:
