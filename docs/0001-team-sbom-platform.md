@@ -1,12 +1,12 @@
 # ADR-0001: Collect GitHub's dependency-graph SBOMs into Dependency-Track
 
-**Status:** Proposed, 11 Nov 2026. Replaces the per-repo CI design on `main` and the enterprise-wide design on `feature/enterprise-sbom-platform`.
+**Status:** Proposed, 11 Nov 2026.
 
 ## Context
 
 The team needs to know what each of the org's repositories depends on, see the known vulnerabilities and licences in those dependencies, and answer "where do we use package X?" quickly during an incident.
 
-The earlier design on `main` made each repo upload its own SBOM from CI, so coverage depended on every repo adding a job. GitHub already builds an SBOM for every repository from its dependency graph. The platform is for one team and one org, with as little to run as possible.
+GitHub already builds an SBOM for every repository from its dependency graph, so collecting those covers every repo without changing any of them. The platform is for one team and one org, with as little to run as possible.
 
 ## Decision
 
@@ -14,10 +14,10 @@ The earlier design on `main` made each repo upload its own SBOM from CI, so cove
 2. **Run one collector:** an Azure Function on Flex Consumption.
    - Each night it queues the repos that changed, plus a rolling seventh of the rest.
    - It fetches each SBOM through GitHub's asynchronous export API, archives it to Blob for 13 months, converts it to CycloneDX and loads it into Dependency-Track.
-3. **Use Dependency-Track as the only dashboard.** It re-checks every component against new vulnerabilities continuously, applies licence policies, records triage decisions, and searches components across all projects. DefectDojo and Sentinel aren't used.
+3. **Use Dependency-Track as the only dashboard.** It re-checks every component against new vulnerabilities continuously, applies licence policies, records triage decisions, and searches components across all projects.
 4. **Keep it to one team with two roles.** `sg-sbom-cps-admins` administers Dependency-Track and `sg-sbom-cps-users` triages findings. Portfolio access control is off, so everyone who can sign in sees every project.
 5. **No private networking.** Every service uses its public endpoint and authenticates every caller.
-6. **Cover Terraform from CI.** The dependency graph has no Terraform support, so Terraform repos keep a CI job (`sbom-scan.yml`).
+6. **Cover Terraform from CI.** The dependency graph has no Terraform support, so Terraform repos add one CI job (`sbom-scan.yml`).
 7. **Deploy with Terraform from GitHub Actions**, from `main` only, using OIDC.
 
 ## Security model
@@ -30,18 +30,9 @@ The earlier design on `main` made each repo upload its own SBOM from CI, so cove
 | Dependency-Track API | Internet | An API key or a signed-in session on every call |
 | Dependency-Track UI | `allowed_ip_ranges` | Sign-in |
 
-The API can't be IP-restricted. The Function has no fixed outbound IP without a VNet and NAT gateway, and people's browsers call the API directly from the UI.
+The API can't be IP-restricted. The Function has no fixed outbound IP, and people's browsers call the API directly from the UI. Giving the Function a fixed IP would take a VNet and a NAT gateway: about £30 a month, plus a network to run. That's worth adding only if the API must not face the internet, or if the GitHub org enforces an IP allow list.
 
 The only long-lived secrets are the GitHub App key and the two Dependency-Track API keys, all in Key Vault. The one storage account with a key, `stdtrack<env>`, holds only Dependency-Track's rebuildable caches, because Container Apps file mounts require a key.
-
-## Alternatives considered
-
-| Alternative | Why not |
-|---|---|
-| Per-repo CI uploads (`main`) | Coverage depends on every repo adding a job, and nothing shows which repos haven't |
-| Enterprise-wide, with Sentinel and private endpoints | Built for a wider scope than this team needs. It needs landing-zone subnets, private DNS and a jump box. |
-| VNet and NAT gateway for the Function only | About £30 a month and a network to run, to restrict an API that already needs a key. Revisit if the API must not be internet-facing, or if GitHub IP allow lists are enforced. |
-| Keep DefectDojo | A second self-hosted app with its own database, for cross-tool aggregation this design doesn't need |
 
 ## Consequences
 
