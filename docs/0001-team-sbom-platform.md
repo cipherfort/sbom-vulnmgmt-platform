@@ -41,7 +41,7 @@ The only long-lived secrets are the GitHub App key and the two Dependency-Track 
 
 **Accepted risks**
 - **A Dependency-Track vulnerability would be exposed to the internet.** Patch within 7 days of a security release.
-- **SBOMs show the default branch**, which isn't necessarily what's deployed. `release-sbom-attest.yml` covers services that adopt it.
+- **SBOMs show the default branch**, which isn't necessarily what's deployed.
 - **Some repos show `no-dependency-graph`:** those without lockfiles, or in unsupported ecosystems.
 - **Dependency-Track runs as one replica**, so the UI is down briefly during patching. The data is safe in Postgres and Blob.
 - **GitHub allows 100 SBOMs an hour**, so a large org's first collection takes several hours.

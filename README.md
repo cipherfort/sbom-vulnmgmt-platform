@@ -27,8 +27,7 @@ Everything runs in one resource group, `rg-sbom-<env>`, in UK South. The Azure s
 | `.github/workflows/cd.yml` | Deploys Terraform and the collector code |
 | `.github/workflows/sbom-setup.yml` | One-off setup after the first deploy |
 | `.github/workflows/sbom-scan.yml` | Reusable workflow for Terraform repos |
-| `.github/workflows/image-scan.yml`, `container-sbom.yml`, `release-sbom-attest.yml` | Optional reusable workflows for container images |
-| `examples/consumer-workflows/` | How other repos call the reusable workflows |
+| `examples/consumer-workflows/` | How Terraform repos call `sbom-scan.yml` |
 
 ## Documentation
 

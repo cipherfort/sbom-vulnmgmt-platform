@@ -54,14 +54,6 @@ Repos whose last result wasn't `ok` are always retried on the next run.
 
 GitHub's dependency graph has no Terraform support, so Terraform repos call [`sbom-scan.yml`](../.github/workflows/sbom-scan.yml). Copy [`examples/consumer-workflows/ci.yml`](../examples/consumer-workflows/ci.yml) and [`cd.yml`](../examples/consumer-workflows/cd.yml). The org-wide variable and secret they need are set up in the [runbook](deployment-runbook.md#optional-terraform-repos).
 
-## Container images (optional)
-
-- [`container-sbom.yml`](../.github/workflows/container-sbom.yml) adds an image's packages to the repo's dependency graph, so the collector picks them up.
-- [`release-sbom-attest.yml`](../.github/workflows/release-sbom-attest.yml) signs a release SBOM.
-- [`image-scan.yml`](../.github/workflows/image-scan.yml) scans images with Trivy into the repo's Security tab.
-
-[`container-image.yml`](../examples/consumer-workflows/container-image.yml) shows the first two together.
-
 ## Rotating credentials
 
 | Credential | Where it lives | How to rotate it |

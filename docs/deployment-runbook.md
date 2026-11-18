@@ -222,8 +222,6 @@ az keyvault secret show --vault-name $KV -n dtrack-ci-api-key --query value -o t
 gh api -X PUT repos/$GH_REPO/actions/permissions/access -f access_level=organization
 ```
 
-To try it on this repo first, run **Test SBOM Scan** from the Actions tab.
-
 ## Deploying without the pipeline
 
 You can run the same steps from your own machine. You need Owner on the resource group and Storage Blob Data Contributor on the state account. Skip the deployer identity and the GitHub secrets, but keep `~/sbom.tfvars.json`.
